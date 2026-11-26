@@ -1154,6 +1154,10 @@
       "additionalProperties": false,
       "description": "The project (IfcProject).",
       "properties": {
+        "default_unit": {
+          "$ref": "#/$defs/ProjectUnit",
+          "description": "The unit of a bare number typed by the user (5.2, Q-9)."
+        },
         "id": {
           "$ref": "#/$defs/Uuid"
         },
@@ -1163,9 +1167,18 @@
       },
       "required": [
         "id",
-        "name"
+        "name",
+        "default_unit"
       ],
       "type": "object"
+    },
+    "ProjectUnit": {
+      "description": "The unit of a bare number. Stored on the project (Q-9).",
+      "enum": [
+        "inches",
+        "feet"
+      ],
+      "type": "string"
     },
     "PropertyValue": {
       "description": "Free-form property values: no decimals (Q-8).",

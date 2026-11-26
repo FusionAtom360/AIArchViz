@@ -1,0 +1,6 @@
+---
+source: crates/core/src/log.rs
+expression: text.into_bytes()
+extension: jsonl
+snapshot_kind: binary
+---

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::document::{Document, SCHEMA_VERSION};
@@ -42,9 +43,9 @@ impl fmt::Display for CanonicalError {
 
 impl std::error::Error for CanonicalError {}
 
-/// The canonical JSON text of `doc`.
-pub fn to_canonical_json(doc: &Document) -> Result<String, CanonicalError> {
-    let value = serde_json::to_value(doc).map_err(|e| CanonicalError::Json(e.to_string()))?;
+/// The canonical JSON text of `value`: a document, a log entry or a snapshot.
+pub fn to_canonical_json<T: Serialize>(value: &T) -> Result<String, CanonicalError> {
+    let value = serde_json::to_value(value).map_err(|e| CanonicalError::Json(e.to_string()))?;
     let mut out = String::new();
     write_value(&value, None, 0, &mut out)?;
     Ok(out)
@@ -199,6 +200,7 @@ mod tests {
             Project {
                 id: id("project", 0),
                 name: "Shop".into(),
+                default_unit: crate::units::ProjectUnit::Inches,
             },
             Building {
                 id: id("building", 0),

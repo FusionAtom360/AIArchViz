@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::{Label, LabelAllocator, Uuid};
 use crate::length::Length;
+use crate::units::ProjectUnit;
 
 /// The schema version this build reads and writes.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -294,6 +295,8 @@ pub type Properties = BTreeMap<String, PropertyValue>;
 pub struct Project {
     pub id: Uuid,
     pub name: String,
+    /// The unit of a bare number typed by the user (5.2, Q-9).
+    pub default_unit: ProjectUnit,
 }
 
 /// The building (IfcBuilding).

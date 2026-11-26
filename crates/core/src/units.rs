@@ -35,8 +35,19 @@ pub enum InputContext {
     AssetSpec,
 }
 
-/// The unit of a bare number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The unit of a bare number. Stored on the project (Q-9).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectUnit {
     #[default]
     Inches,

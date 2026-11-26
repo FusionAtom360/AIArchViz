@@ -129,6 +129,92 @@ fn float_lint_step(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::workspace_root;
+    use archviz_core::{
+        Action, Building, Command, Document, Length, Project, ProjectUnit, SetStorey, Source,
+        Sourced, Uuid, apply, to_canonical_json,
+    };
+
+    const CHILD_ENV: &str = "ARCHVIZ_DETERMINISM_CHILD";
+
+    /// T-105: one fixed command applied to one fixed document, as canonical JSON.
+    fn determinism_result() -> Result<String, String> {
+        let feet = |n: i64| Sourced {
+            value: Length::from_nanometers(n * 304_800_000),
+            source: Source::UserStated,
+        };
+        let genesis = Document::new(
+            Project {
+                id: Uuid::from_bytes([1; 16]),
+                name: "Shop".into(),
+                default_unit: ProjectUnit::Inches,
+            },
+            Building {
+                id: Uuid::from_bytes([2; 16]),
+                name: "Main".into(),
+            },
+        );
+        let command = Command {
+            id: Uuid::from_bytes([3; 16]),
+            idempotency_key: Uuid::from_bytes([4; 16]),
+            action: Action::SetStorey(SetStorey {
+                storey: None,
+                name: "Ground".into(),
+                elevation: feet(0),
+                floor_to_floor: feet(10),
+                default_ceiling_height: feet(9),
+            }),
+        };
+        let doc = apply(&genesis, &command).map_err(|e| e.to_string())?;
+        to_canonical_json(&doc).map_err(|e| e.to_string())
+    }
+
+    /// Prints the result when run as a child process; a no-op otherwise.
+    #[test]
+    fn determinism_child() {
+        if std::env::var_os(CHILD_ENV).is_some() {
+            match determinism_result() {
+                Ok(text) => print!("<<<{text}>>>"),
+                Err(e) => print!("<<<error: {e}>>>"),
+            }
+        }
+    }
+
+    /// Runs this test binary as a separate process and returns what
+    /// `determinism_child` printed.
+    fn child_output() -> Result<String, String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "tests::determinism_child",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8(out.stdout).map_err(|e| e.to_string())?;
+        let start = stdout.find("<<<").ok_or("child printed no result")? + 3;
+        let end = stdout[start..]
+            .find(">>>")
+            .ok_or("child result not terminated")?
+            + start;
+        Ok(stdout[start..end].to_string())
+    }
+
+    /// T-105: the same command agrees twice in one process and across two
+    /// separate processes.
+    #[test]
+    fn same_command_agrees_across_processes() -> Result<(), String> {
+        let in_process = [determinism_result()?, determinism_result()?];
+        assert_eq!(in_process[0], in_process[1]);
+        let children = [child_output()?, child_output()?];
+        assert!(!children[0].starts_with("error"), "{}", children[0]);
+        assert_eq!(children[0], children[1]);
+        assert_eq!(children[0], in_process[0]);
+        Ok(())
+    }
 
     /// T-004: CI runs `cargo xtask check` on Windows for every push.
     #[test]

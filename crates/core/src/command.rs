@@ -1,0 +1,512 @@
+//! Commands (spec 8.1, 8.2) and the pure `apply`.
+//!
+//! A command is `{id, kind, args, idempotency_key}`. It holds no clock value
+//! or randomness: every new entity id is `Uuid::derive(idempotency_key,
+//! "command", ordinal)`, ordinals counting from 0 within the command.
+//!
+//! T-105 implements the commands that are pure data edits (Q-9): CreateNode,
+//! SetStorey, SetVariantSelection and SetProjectUnits. Every other v1
+//! command parses with empty `args` and returns
+//! [`CommandError::NotYetImplemented`]; its arguments are defined by the task
+//! that implements it.
+
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+
+use crate::document::{Document, JoinType, Node, Sourced, Storey};
+use crate::identity::Uuid;
+use crate::length::Length;
+use crate::units::ProjectUnit;
+
+/// One command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command {
+    pub id: Uuid,
+    pub idempotency_key: Uuid,
+    pub action: Action,
+}
+
+/// Arguments of a command whose arguments are not defined yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoArgs {}
+
+/// Creates an isolated node. Its position is provisional until solved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateNode {
+    pub x: Length,
+    pub y: Length,
+}
+
+/// Creates a storey (`storey` is null) or replaces an existing one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetStorey {
+    pub storey: Option<Uuid>,
+    pub name: String,
+    pub elevation: Sourced<Length>,
+    pub floor_to_floor: Sourced<Length>,
+    pub default_ceiling_height: Sourced<Length>,
+}
+
+/// Selects one of a variant slot's options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetVariantSelection {
+    pub slot: Uuid,
+    pub selected: Uuid,
+}
+
+/// Sets the unit of bare numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectUnits {
+    pub default_unit: ProjectUnit,
+}
+
+/// The v1 command set (8.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "args",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum Action {
+    CreateNode(CreateNode),
+    CreateWall(NoArgs),
+    SplitWall(NoArgs),
+    MergeWalls(NoArgs),
+    SetWallLayers(NoArgs),
+    MoveWall(NoArgs),
+    CreateOpening(NoArgs),
+    MoveOpening(NoArgs),
+    PlaceOccurrence(NoArgs),
+    MoveOccurrence(NoArgs),
+    RotateOccurrence(NoArgs),
+    DeleteEntity(NoArgs),
+    AddConstraint(NoArgs),
+    RemoveConstraint(NoArgs),
+    SetConstraintValue(NoArgs),
+    SetStorey(SetStorey),
+    ApplyOperator(NoArgs),
+    RemoveOperator(NoArgs),
+    SetVariantSelection(SetVariantSelection),
+    SetProjectUnits(SetProjectUnits),
+}
+
+impl Action {
+    /// The `kind` string of this action.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Action::CreateNode(_) => "create_node",
+            Action::CreateWall(_) => "create_wall",
+            Action::SplitWall(_) => "split_wall",
+            Action::MergeWalls(_) => "merge_walls",
+            Action::SetWallLayers(_) => "set_wall_layers",
+            Action::MoveWall(_) => "move_wall",
+            Action::CreateOpening(_) => "create_opening",
+            Action::MoveOpening(_) => "move_opening",
+            Action::PlaceOccurrence(_) => "place_occurrence",
+            Action::MoveOccurrence(_) => "move_occurrence",
+            Action::RotateOccurrence(_) => "rotate_occurrence",
+            Action::DeleteEntity(_) => "delete_entity",
+            Action::AddConstraint(_) => "add_constraint",
+            Action::RemoveConstraint(_) => "remove_constraint",
+            Action::SetConstraintValue(_) => "set_constraint_value",
+            Action::SetStorey(_) => "set_storey",
+            Action::ApplyOperator(_) => "apply_operator",
+            Action::RemoveOperator(_) => "remove_operator",
+            Action::SetVariantSelection(_) => "set_variant_selection",
+            Action::SetProjectUnits(_) => "set_project_units",
+        }
+    }
+}
+
+/// The flat wire form of a command (8.1).
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Wire {
+    id: Uuid,
+    idempotency_key: Uuid,
+    kind: String,
+    args: Value,
+}
+
+impl Serialize for Command {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error;
+        let tagged = serde_json::to_value(&self.action).map_err(S::Error::custom)?;
+        let args = tagged.get("args").cloned().unwrap_or(Value::Null);
+        Wire {
+            id: self.id,
+            idempotency_key: self.idempotency_key,
+            kind: self.action.kind().to_string(),
+            args,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Command {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let wire = Wire::deserialize(deserializer)?;
+        let tagged = serde_json::json!({ "kind": wire.kind, "args": wire.args });
+        let action = serde_json::from_value(tagged).map_err(D::Error::custom)?;
+        Ok(Command {
+            id: wire.id,
+            idempotency_key: wire.idempotency_key,
+            action,
+        })
+    }
+}
+
+/// Why a command cannot be applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandError {
+    /// The command is in the v1 set but a later task implements it.
+    NotYetImplemented(&'static str),
+    /// No entity of the expected kind has this id.
+    UnknownEntity(Uuid),
+    /// A derived new id is already taken (the same idempotency key reused).
+    IdCollision(Uuid),
+    /// The selected option is not one of the slot's options.
+    InvalidOption { slot: Uuid, option: Uuid },
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandError::NotYetImplemented(kind) => write!(f, "{kind} is not implemented yet"),
+            CommandError::UnknownEntity(id) => write!(f, "no entity {id}"),
+            CommandError::IdCollision(id) => write!(f, "new id {id} already exists"),
+            CommandError::InvalidOption { slot, option } => {
+                write!(f, "{option} is not an option of variant slot {slot}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+/// The document after `command`, or why it cannot be applied. Pure: the
+/// result depends only on the two arguments.
+pub fn apply(document: &Document, command: &Command) -> Result<Document, CommandError> {
+    let mut doc = document.clone();
+    let new_id =
+        |ordinal: u32| Uuid::derive(command.idempotency_key, "command", &ordinal.to_string());
+    match &command.action {
+        Action::CreateNode(args) => {
+            let id = new_id(0);
+            if doc.nodes.contains_key(&id) {
+                return Err(CommandError::IdCollision(id));
+            }
+            doc.nodes.insert(
+                id,
+                Node {
+                    x: args.x,
+                    y: args.y,
+                    join: JoinType::Isolated,
+                },
+            );
+        }
+        Action::SetStorey(args) => {
+            let id = match args.storey {
+                Some(id) if doc.storeys.contains_key(&id) => id,
+                Some(id) => return Err(CommandError::UnknownEntity(id)),
+                None => {
+                    let id = new_id(0);
+                    if doc.storeys.contains_key(&id) {
+                        return Err(CommandError::IdCollision(id));
+                    }
+                    id
+                }
+            };
+            doc.storeys.insert(
+                id,
+                Storey {
+                    name: args.name.clone(),
+                    elevation: args.elevation.clone(),
+                    floor_to_floor: args.floor_to_floor.clone(),
+                    default_ceiling_height: args.default_ceiling_height.clone(),
+                },
+            );
+        }
+        Action::SetVariantSelection(args) => {
+            let slot = doc
+                .variant_slots
+                .get_mut(&args.slot)
+                .ok_or(CommandError::UnknownEntity(args.slot))?;
+            if !slot.options.contains(&args.selected) {
+                return Err(CommandError::InvalidOption {
+                    slot: args.slot,
+                    option: args.selected,
+                });
+            }
+            slot.selected = args.selected;
+        }
+        Action::SetProjectUnits(args) => doc.project.default_unit = args.default_unit,
+        other => return Err(CommandError::NotYetImplemented(other.kind())),
+    }
+    Ok(doc)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::canonical::to_canonical_json;
+    use crate::document::{Building, Project, Source, VariantKind, VariantSlot};
+
+    pub(crate) fn uid(n: u8) -> Uuid {
+        Uuid::from_bytes([n; 16])
+    }
+
+    pub(crate) fn genesis() -> Document {
+        let mut doc = Document::new(
+            Project {
+                id: uid(1),
+                name: "Shop".into(),
+                default_unit: ProjectUnit::Inches,
+            },
+            Building {
+                id: uid(2),
+                name: "Main".into(),
+            },
+        );
+        doc.variant_slots.insert(
+            uid(10),
+            VariantSlot {
+                owner: uid(1),
+                kind: VariantKind::Material,
+                options: vec![uid(11), uid(12)],
+                selected: uid(11),
+            },
+        );
+        doc
+    }
+
+    pub(crate) fn cmd(n: u8, action: Action) -> Command {
+        Command {
+            id: Uuid::derive(uid(0xC0), "id", &n.to_string()),
+            idempotency_key: Uuid::derive(uid(0xC0), "key", &n.to_string()),
+            action,
+        }
+    }
+
+    fn sourced(nm: i64) -> Sourced<Length> {
+        Sourced {
+            value: Length::from_nanometers(nm),
+            source: Source::UserStated,
+        }
+    }
+
+    pub(crate) fn set_storey(storey: Option<Uuid>, name: &str) -> Action {
+        Action::SetStorey(SetStorey {
+            storey,
+            name: name.into(),
+            elevation: sourced(0),
+            floor_to_floor: sourced(3_048_000_000),
+            default_ceiling_height: sourced(2_743_200_000),
+        })
+    }
+
+    pub(crate) fn create_node(x: i64, y: i64) -> Action {
+        Action::CreateNode(CreateNode {
+            x: Length::from_nanometers(x),
+            y: Length::from_nanometers(y),
+        })
+    }
+
+    #[test]
+    fn create_node_uses_the_derived_id() {
+        let c = cmd(1, create_node(5, -7));
+        let doc = apply(&genesis(), &c);
+        let expected_id = Uuid::derive(c.idempotency_key, "command", "0");
+        let node = doc
+            .as_ref()
+            .ok()
+            .and_then(|d| d.nodes.get(&expected_id))
+            .cloned();
+        assert_eq!(
+            node,
+            Some(Node {
+                x: Length::from_nanometers(5),
+                y: Length::from_nanometers(-7),
+                join: JoinType::Isolated,
+            })
+        );
+        // The same command again collides with its own earlier result.
+        let again = doc.and_then(|d| apply(&d, &c));
+        assert_eq!(again, Err(CommandError::IdCollision(expected_id)));
+    }
+
+    #[test]
+    fn set_storey_creates_then_updates() {
+        let c = cmd(1, set_storey(None, "Ground"));
+        let id = Uuid::derive(c.idempotency_key, "command", "0");
+        let created = apply(&genesis(), &c);
+        assert_eq!(
+            created
+                .as_ref()
+                .map(|d| d.storeys.get(&id).map(|s| s.name.clone())),
+            Ok(Some("Ground".to_string()))
+        );
+        let renamed = created.and_then(|d| apply(&d, &cmd(2, set_storey(Some(id), "Level 1"))));
+        assert_eq!(
+            renamed
+                .as_ref()
+                .map(|d| (d.storeys.len(), d.storeys.get(&id).map(|s| s.name.clone()))),
+            Ok((1, Some("Level 1".to_string())))
+        );
+        assert_eq!(
+            apply(&genesis(), &cmd(3, set_storey(Some(uid(99)), "Nope"))),
+            Err(CommandError::UnknownEntity(uid(99)))
+        );
+    }
+
+    #[test]
+    fn set_variant_selection_checks_the_options() {
+        let select = |slot, selected| {
+            cmd(
+                1,
+                Action::SetVariantSelection(SetVariantSelection { slot, selected }),
+            )
+        };
+        let doc = apply(&genesis(), &select(uid(10), uid(12)));
+        assert_eq!(
+            doc.map(|d| d.variant_slots.get(&uid(10)).map(|s| s.selected)),
+            Ok(Some(uid(12)))
+        );
+        assert_eq!(
+            apply(&genesis(), &select(uid(10), uid(13))),
+            Err(CommandError::InvalidOption {
+                slot: uid(10),
+                option: uid(13)
+            })
+        );
+        assert_eq!(
+            apply(&genesis(), &select(uid(9), uid(12))),
+            Err(CommandError::UnknownEntity(uid(9)))
+        );
+    }
+
+    #[test]
+    fn set_project_units() {
+        let c = cmd(
+            1,
+            Action::SetProjectUnits(SetProjectUnits {
+                default_unit: ProjectUnit::Feet,
+            }),
+        );
+        assert_eq!(
+            apply(&genesis(), &c).map(|d| d.project.default_unit),
+            Ok(ProjectUnit::Feet)
+        );
+    }
+
+    fn unimplemented_actions() -> Vec<Action> {
+        let n = || NoArgs {};
+        vec![
+            Action::CreateWall(n()),
+            Action::SplitWall(n()),
+            Action::MergeWalls(n()),
+            Action::SetWallLayers(n()),
+            Action::MoveWall(n()),
+            Action::CreateOpening(n()),
+            Action::MoveOpening(n()),
+            Action::PlaceOccurrence(n()),
+            Action::MoveOccurrence(n()),
+            Action::RotateOccurrence(n()),
+            Action::DeleteEntity(n()),
+            Action::AddConstraint(n()),
+            Action::RemoveConstraint(n()),
+            Action::SetConstraintValue(n()),
+            Action::ApplyOperator(n()),
+            Action::RemoveOperator(n()),
+        ]
+    }
+
+    #[test]
+    fn the_rest_of_the_v1_set_is_not_yet_implemented() {
+        let actions = unimplemented_actions();
+        assert_eq!(actions.len() + 4, 20, "8.2 lists 20 commands");
+        for action in actions {
+            let kind = action.kind();
+            assert_eq!(
+                apply(&genesis(), &cmd(1, action)),
+                Err(CommandError::NotYetImplemented(kind))
+            );
+        }
+    }
+
+    #[test]
+    fn wire_form_is_flat_and_round_trips() -> Result<(), String> {
+        let c = cmd(1, create_node(1, 2));
+        let text = to_canonical_json(&c).map_err(|e| e.to_string())?;
+        assert_eq!(
+            text,
+            format!(
+                r#"{{"args":{{"x":1,"y":2}},"id":"{}","idempotency_key":"{}","kind":"create_node"}}"#,
+                c.id, c.idempotency_key
+            )
+        );
+        let back: Command = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        assert_eq!(back, c);
+        let empty = cmd(2, Action::DeleteEntity(NoArgs {}));
+        let text = to_canonical_json(&empty).map_err(|e| e.to_string())?;
+        assert!(text.contains(r#""args":{},"#), "{text}");
+        let back: Command = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        assert_eq!(back, empty);
+        Ok(())
+    }
+
+    #[test]
+    fn wire_form_rejects_bad_commands() {
+        let base = serde_json::json!({
+            "id": uid(1), "idempotency_key": uid(2), "kind": "create_node", "args": {"x": 1, "y": 2}
+        });
+        let parse = |v: Value| serde_json::from_value::<Command>(v).is_ok();
+        assert!(parse(base.clone()));
+        let mut extra = base.clone();
+        extra["extra"] = 1.into();
+        assert!(!parse(extra));
+        let mut kind = base.clone();
+        kind["kind"] = "teleport".into();
+        assert!(!parse(kind));
+        let mut args = base.clone();
+        args["args"]["z"] = 3.into();
+        assert!(!parse(args));
+        let mut missing = base;
+        if let Some(o) = missing.as_object_mut() {
+            o.remove("idempotency_key");
+        }
+        assert!(!parse(missing));
+    }
+
+    /// The canonical document after one fixed command. A golden file makes
+    /// the result identical across runs, processes and machines.
+    #[test]
+    fn apply_result_golden() -> Result<(), String> {
+        let doc = apply(&genesis(), &cmd(1, create_node(25_400_000, -12_700_000)))
+            .map_err(|e| e.to_string())?;
+        let text = to_canonical_json(&doc).map_err(|e| e.to_string())?;
+        insta::assert_binary_snapshot!("create_node_result.json", text.into_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn same_command_twice_in_one_process_agrees() -> Result<(), String> {
+        let c = cmd(1, set_storey(None, "Ground"));
+        let a = apply(&genesis(), &c).map_err(|e| e.to_string())?;
+        let b = apply(&genesis(), &c).map_err(|e| e.to_string())?;
+        assert_eq!(
+            to_canonical_json(&a).map_err(|e| e.to_string())?,
+            to_canonical_json(&b).map_err(|e| e.to_string())?
+        );
+        Ok(())
+    }
+}
