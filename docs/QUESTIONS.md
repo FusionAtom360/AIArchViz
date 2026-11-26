@@ -34,3 +34,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) host on GitHub and add the remote before T-004; (b) host somewhere else.
 - Recommendation: (a). T-004 is written for GitHub-style workflows.
 - Answer: (a) published on GitHub with `origin` set (owner, 2026-11-26). T-004 targets GitHub Actions.
+
+## Q-1: What "rounded" means for inch input finer than 1/64 in (T-102, status: answered)
+- Context: spec 5.1 says "Inch fractions finer than 1/64 in are rounded on input with the error reported". This only matters in the asset-specification context, since the user context rejects anything off the 1/16 in grid (5.3). It does not say what they are rounded to. Some finer fractions are exact in nanometers (1/100 in = 254,000 nm, 1/128 in is not: 198,437.5 nm).
+- Options: (a) round to the nearest nanometer, half to even, and report the residual; exact inputs such as 1/100 in stay exact; (b) round to the nearest 1/64 in and report the difference.
+- Recommendation: (a). It keeps manufacturer values as exact as storage allows (the residual is at most 0.5 nm) and matches T-101's division rule. Option (b) can move a value by up to 1/128 in (about 0.2 mm).
+- Answer: (a) nearest nanometer, half to even, residual reported (owner, 2026-11-26).
+
+## Q-2: Canonical feet-inches text for edge cases (T-102, status: answered)
+- Context: spec 5.2 and 5.3 give one example, 10'-4 1/2". The format for values under a foot, whole feet, zero and negatives is not stated, and the echo and display (and later golden echo strings, T-303) depend on it.
+- Options: (a) always feet and inches, architectural style as in AutoCAD: 0'-4 1/2", 10'-0", 0'-0", -10'-4 1/2", ~10'-4 1/2"; fractions reduced (1/2, 3/8, 15/16); (b) drop zero feet: 4 1/2", 10'-0", 0"; (c) something else.
+- Recommendation: (a). One shape for every value is the most predictable, and it matches the AutoCAD architectural units the client uses (11.1). The ~ goes before the sign: ~-0'-0 1/16".
+- Answer: (a) always feet and inches, architectural style; ~ before the sign (owner, 2026-11-26).
+
+## Q-3: What the echo function shows (T-102, status: answered)
+- Context: spec 5.2 requires echoing every parsed value in canonical feet-inches-fraction form. 5.3 says an off-grid stored value's exact value is shown "on inspection and in reports". Asset-context values (metric, fine fractions) are usually off the 1/16 in grid, so the canonical text alone (~0'-0 1/2") hides what was stored. Decimal inches cannot show it exactly (1 nm = 1/25,400,000 in, and 25,400,000 has the factor 127), but millimeters can (1 nm = 0.000001 mm).
+- Options: (a) echo is exactly format_length; (b) echo is format_length, and for an off-grid value it adds the exact stored value in millimeters, plus the input rounding from Q-1 when there was any; (c) something else.
+- Recommendation: (b). On grid: `10'-4 1/2"`. Off grid: `~0'-0 1/2" (exact 12 mm)`. Rounded input: `~0'-0" (exact 0.198438 mm, rounded 0.5 nm from input)`. Millimeters print with trailing zeros removed.
+- Answer: (b) canonical text, plus exact millimeters for off-grid values and the input rounding when any (owner, 2026-11-26).
