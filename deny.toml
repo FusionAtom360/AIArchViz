@@ -1,0 +1,22 @@
+# cargo-deny configuration. Allowed licenses: docs/PLAN.md section 2 (spec D-19).
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "wasm32-unknown-unknown"]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# Workspace crates are publish = false and carry the root GPLv3 LICENSE;
+# the allow list governs third-party dependencies only.
+ignore = true
