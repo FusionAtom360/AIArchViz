@@ -7,7 +7,7 @@ Priorities, in order: precision, predictability, ease of use, realism.
 ## Workflow
 - Work on exactly one task ID per session. Before writing code, read the task in docs/PLAN.md and every spec section it cites.
 - Write failing tests first, then implement, then run `cargo xtask check` until it passes.
-- Commit as `T-xxx: title`, append one line to docs/PROGRESS.md, and stop. Never start the next task.
+- Commit as `T-xxx: title`, append one line to docs/PROGRESS.md, push to origin, and stop. Never start the next task.
 - If the spec is ambiguous, contradictory or impossible, stop and write docs/QUESTIONS.md with options and a recommendation. Never guess.
 - Never edit docs/SPEC.md. A deviation needs an entry in docs/DECISIONS.md approved by the owner.
 - Do not add features, options or abstractions the task does not ask for.

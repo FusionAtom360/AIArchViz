@@ -11,7 +11,7 @@ Each task fits one Claude Code session, ends with a green check and a commit, an
 1. Open a fresh Claude Code session in the repository root.
 2. Run /task T-xxx (defined in section 3). Claude Code reads CLAUDE.md, the task entry and the specification sections the task cites.
 3. Claude Code writes failing tests, implements, and runs cargo xtask check until it passes.
-4. It commits as T-xxx: title, appends one line to docs/PROGRESS.md, reports the evidence for each Done when line, and stops. It does not start the next task.
+4. It commits as T-xxx: title, appends one line to docs/PROGRESS.md, pushes to origin, reports the evidence for each Done when line, and stops. It does not start the next task.
 5. You review the diff and the evidence. At a human gate (section 4) you do the listed action and report back before the next task starts.
 6. After the last task of a phase, run /review-phase N in a fresh session (section 11), triage the findings, and tag the repository phase-N.
 
@@ -74,7 +74,7 @@ Priorities, in order: precision, predictability, ease of use, realism.
 ## Workflow
 - Work on exactly one task ID per session. Before writing code, read the task in docs/PLAN.md and every spec section it cites.
 - Write failing tests first, then implement, then run `cargo xtask check` until it passes.
-- Commit as `T-xxx: title`, append one line to docs/PROGRESS.md, and stop. Never start the next task.
+- Commit as `T-xxx: title`, append one line to docs/PROGRESS.md, push to origin, and stop. Never start the next task.
 - If the spec is ambiguous, contradictory or impossible, stop and write docs/QUESTIONS.md with options and a recommendation. Never guess.
 - Never edit docs/SPEC.md. A deviation needs an entry in docs/DECISIONS.md approved by the owner.
 - Do not add features, options or abstractions the task does not ask for.
@@ -104,7 +104,7 @@ Implement task $ARGUMENTS from docs/PLAN.md.
 2. State the files you will create or change and the tests you will write.
 3. Write failing tests, implement, and run `cargo xtask check` until it is green.
 4. For each line of the task's Done when, quote the command output that proves it.
-5. Commit, append to docs/PROGRESS.md, and stop. Report what changed, the evidence, and any open questions.
+5. Commit, append to docs/PROGRESS.md, push to origin, and stop. Report what changed, the evidence, and any open questions.
 
 Stop and ask if: the spec is ambiguous, a dependency falls outside the license list, a test fails and you cannot explain why, or the task reaches a human gate.
 ```
