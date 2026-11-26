@@ -1,0 +1,1969 @@
+{
+  "$defs": {
+    "Asset": {
+      "additionalProperties": false,
+      "description": "An external file (IfcDocumentReference).",
+      "properties": {
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "converter_log": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/Fidelity"
+        },
+        "license": {
+          "type": "string"
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "content_hash",
+        "license",
+        "fidelity",
+        "converter_log"
+      ],
+      "type": "object"
+    },
+    "Authority": {
+      "description": "Dimension authority, highest first (D-11).",
+      "enum": [
+        "user_stated_exact",
+        "manufacturer_spec",
+        "cad_derived",
+        "measured_with_tolerance",
+        "proposed_default",
+        "mesh_derived"
+      ],
+      "type": "string"
+    },
+    "Axis": {
+      "description": "A plan axis.",
+      "enum": [
+        "x",
+        "y"
+      ],
+      "type": "string"
+    },
+    "Boundary": {
+      "description": "A rectilinear boundary given explicitly or taken from a space.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "points": {
+              "items": {
+                "$ref": "#/$defs/Point"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "from_space",
+              "type": "string"
+            },
+            "space": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "space"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Building": {
+      "additionalProperties": false,
+      "description": "The building (IfcBuilding).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "CalibrationCheck": {
+      "additionalProperties": false,
+      "description": "A second known distance and how far the calibration misses it. The\nresidual is derived and stored (Q-7).",
+      "properties": {
+        "known": {
+          "$ref": "#/$defs/KnownDistance"
+        },
+        "residual": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "known",
+        "residual"
+      ],
+      "type": "object"
+    },
+    "CameraBookmark": {
+      "additionalProperties": false,
+      "description": "A named viewpoint (12.6).",
+      "properties": {
+        "eye_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "heading": {
+          "$ref": "#/$defs/Millidegrees"
+        },
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/Point"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "name",
+        "storey",
+        "position",
+        "eye_height",
+        "heading"
+      ],
+      "type": "object"
+    },
+    "Ceiling": {
+      "additionalProperties": false,
+      "description": "A ceiling (IfcCovering).",
+      "properties": {
+        "boundary": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "storey",
+        "boundary",
+        "thickness",
+        "elevation"
+      ],
+      "type": "object"
+    },
+    "Clearance": {
+      "additionalProperties": false,
+      "description": "Clearance zone extents around a footprint (Q-8).",
+      "properties": {
+        "back": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "front": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "left": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "right": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "object"
+    },
+    "Constraint": {
+      "additionalProperties": false,
+      "description": "A constraint (IfcConstraint, weak).",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ConstraintKind"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "status": {
+          "$ref": "#/$defs/ConstraintStatus"
+        }
+      },
+      "required": [
+        "kind",
+        "status",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ConstraintKind": {
+      "description": "Constraint kinds (7.1).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/Reference"
+            },
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "b": {
+              "$ref": "#/$defs/Reference"
+            },
+            "kind": {
+              "const": "distance",
+              "type": "string"
+            },
+            "tolerance": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "a",
+            "b",
+            "axis",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/Reference"
+            },
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "b": {
+              "$ref": "#/$defs/Reference"
+            },
+            "kind": {
+              "const": "align",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "a",
+            "b",
+            "axis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Two Distance constraints, by id, have equal values.",
+          "properties": {
+            "first": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "equal",
+              "type": "string"
+            },
+            "second": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "second"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "fixed",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Checked after solving, not solved (7.1).",
+          "properties": {
+            "kind": {
+              "const": "min_clearance",
+              "type": "string"
+            },
+            "object": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "other": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "object",
+            "other",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConstraintStatus": {
+      "description": "Driving or Reference (7.2).",
+      "enum": [
+        "driving",
+        "reference"
+      ],
+      "type": "string"
+    },
+    "ContentHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Datum": {
+      "additionalProperties": false,
+      "description": "A named point or line anchoring an axis (IfcGrid).",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/DatumGeometry"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "DatumGeometry": {
+      "description": "The shape of a datum.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A point; anchors both axes.",
+          "properties": {
+            "kind": {
+              "const": "point",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Length"
+            },
+            "y": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The line x = constant; anchors the X axis.",
+          "properties": {
+            "kind": {
+              "const": "x_line",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "x"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The line y = constant; anchors the Y axis.",
+          "properties": {
+            "kind": {
+              "const": "y_line",
+              "type": "string"
+            },
+            "y": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "y"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DeclaredDimensions": {
+      "additionalProperties": false,
+      "description": "Declared footprint and height of an element type (10.2).",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/Authority"
+        },
+        "depth": {
+          "$ref": "#/$defs/Length"
+        },
+        "height": {
+          "$ref": "#/$defs/Length"
+        },
+        "width": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "width",
+        "depth",
+        "height",
+        "authority"
+      ],
+      "type": "object"
+    },
+    "Direction": {
+      "description": "A compass direction along a plan axis.",
+      "enum": [
+        "pos_x",
+        "neg_x",
+        "pos_y",
+        "neg_y"
+      ],
+      "type": "string"
+    },
+    "ElementType": {
+      "additionalProperties": false,
+      "description": "A type of placed object (IfcTypeObject).",
+      "properties": {
+        "declared_dimensions": {
+          "$ref": "#/$defs/DeclaredDimensions"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/Fidelity"
+        },
+        "license": {
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyValue"
+          },
+          "type": "object"
+        },
+        "source": {
+          "description": "Where the dimensions came from, e.g. a manufacturer URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "declared_dimensions",
+        "fidelity",
+        "properties",
+        "source",
+        "license"
+      ],
+      "type": "object"
+    },
+    "Feature": {
+      "additionalProperties": false,
+      "description": "An operator instance and the children it derived (8.5).",
+      "properties": {
+        "children": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyValue"
+          },
+          "type": "object"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operator",
+        "version",
+        "parameters",
+        "targets",
+        "children"
+      ],
+      "type": "object"
+    },
+    "Fidelity": {
+      "description": "Asset fidelity tiers (10.1).",
+      "enum": [
+        "exact",
+        "library",
+        "generated",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "Finishes": {
+      "additionalProperties": false,
+      "description": "Finish materials of a space.",
+      "properties": {
+        "ceiling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "walls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Function": {
+      "description": "Whether an element exists, is new work, or is to be removed (6.7).",
+      "enum": [
+        "existing",
+        "new",
+        "demolished"
+      ],
+      "type": "string"
+    },
+    "ItemSide": {
+      "description": "A side of an occurrence footprint, in the occurrence's own frame.",
+      "enum": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "JoinType": {
+      "description": "How walls meet at a node (6.1). Derived.",
+      "oneOf": [
+        {
+          "const": "isolated",
+          "description": "No wall ends here.",
+          "type": "string"
+        },
+        {
+          "const": "free_end",
+          "description": "One wall ends here, square.",
+          "type": "string"
+        },
+        {
+          "const": "l",
+          "description": "Two walls, mitered.",
+          "type": "string"
+        },
+        {
+          "const": "t",
+          "description": "Three walls; the lowest join_priority runs through.",
+          "type": "string"
+        },
+        {
+          "const": "x",
+          "description": "Four walls; the lowest join_priority runs through.",
+          "type": "string"
+        }
+      ]
+    },
+    "KnownDistance": {
+      "additionalProperties": false,
+      "description": "Two image points and the real distance between them.",
+      "properties": {
+        "distance": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pixel_a": {
+          "$ref": "#/$defs/PixelPoint"
+        },
+        "pixel_b": {
+          "$ref": "#/$defs/PixelPoint"
+        }
+      },
+      "required": [
+        "pixel_a",
+        "pixel_b",
+        "distance"
+      ],
+      "type": "object"
+    },
+    "Label": {
+      "pattern": "^[A-Z]+-(00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$",
+      "type": "string"
+    },
+    "LabelAllocator": {
+      "additionalProperties": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": "Issues labels per prefix. Numbers only ever increase, so a label is never\nreissued, even after the entity that held it is deleted. Serialized as\nthe map from prefix to the last number issued, so the guarantee survives\nsaving and loading.",
+      "type": "object"
+    },
+    "Layer": {
+      "additionalProperties": false,
+      "description": "One material layer.",
+      "properties": {
+        "core": {
+          "type": "boolean"
+        },
+        "material": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "material",
+        "thickness",
+        "core"
+      ],
+      "type": "object"
+    },
+    "LayerSet": {
+      "additionalProperties": false,
+      "description": "Layers ordered left to right (IfcMaterialLayerSet).",
+      "properties": {
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/Layer"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "layers"
+      ],
+      "type": "object"
+    },
+    "Length": {
+      "description": "A length in nanometers. Serialized as a bare JSON integer.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "Light": {
+      "additionalProperties": false,
+      "description": "Light data of a light-fixture occurrence (Q-6, 11.3, 12.4).",
+      "properties": {
+        "ies": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kelvin": {
+          "$ref": "#/$defs/Sourced2"
+        },
+        "kind": {
+          "$ref": "#/$defs/LightKind"
+        },
+        "lumens": {
+          "$ref": "#/$defs/Sourced2"
+        }
+      },
+      "required": [
+        "kind",
+        "lumens",
+        "kelvin"
+      ],
+      "type": "object"
+    },
+    "LightKind": {
+      "description": "Light emitter kinds (11.3).",
+      "enum": [
+        "point",
+        "spot",
+        "rect"
+      ],
+      "type": "string"
+    },
+    "Material": {
+      "additionalProperties": false,
+      "description": "A material (Q-6).",
+      "properties": {
+        "asset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyValue"
+          },
+          "type": "object"
+        },
+        "tile_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Real-world size of one texture tile (12.4)."
+        }
+      },
+      "required": [
+        "name",
+        "properties"
+      ],
+      "type": "object"
+    },
+    "Millidegrees": {
+      "maximum": 359999,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "description": "A polyline vertex. Position and join type are solved and stored (Q-7).",
+      "properties": {
+        "join": {
+          "$ref": "#/$defs/JoinType"
+        },
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "join"
+      ],
+      "type": "object"
+    },
+    "Occurrence": {
+      "additionalProperties": false,
+      "description": "A placed object (IfcFurniture, IfcBuildingElementProxy, IfcLightFixture).",
+      "properties": {
+        "clearance": {
+          "$ref": "#/$defs/Clearance"
+        },
+        "element_type": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "fixed": {
+          "description": "Never moves as a consequence of another edit (6.3).",
+          "type": "boolean"
+        },
+        "label": {
+          "$ref": "#/$defs/Label"
+        },
+        "light": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Light"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "$ref": "#/$defs/Placement"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "label",
+        "storey",
+        "element_type",
+        "placement",
+        "clearance",
+        "fixed"
+      ],
+      "type": "object"
+    },
+    "Opening": {
+      "additionalProperties": false,
+      "description": "An opening, door or window in a host wall (IfcOpeningElement, IfcDoor, IfcWindow).",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/OpeningEdge",
+          "description": "Which edge of the opening sits `offset` from `reference`."
+        },
+        "height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "host": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OpeningKind"
+        },
+        "offset": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference",
+          "description": "The along-wall reference the opening is positioned from."
+        },
+        "sill": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "width": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "kind",
+        "host",
+        "reference",
+        "anchor",
+        "offset",
+        "width",
+        "height",
+        "sill"
+      ],
+      "type": "object"
+    },
+    "OpeningEdge": {
+      "description": "An edge or the center of an opening along its host wall.",
+      "enum": [
+        "start",
+        "end",
+        "center"
+      ],
+      "type": "string"
+    },
+    "OpeningKind": {
+      "description": "What fills an opening.",
+      "enum": [
+        "opening",
+        "door",
+        "window"
+      ],
+      "type": "string"
+    },
+    "Overhang": {
+      "additionalProperties": false,
+      "description": "Eave overhang per compass side, applied to every footprint edge facing\nthat way (Q-8).",
+      "properties": {
+        "neg_x": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "neg_y": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pos_x": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pos_y": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "pos_x",
+        "neg_x",
+        "pos_y",
+        "neg_y"
+      ],
+      "type": "object"
+    },
+    "Pitch": {
+      "additionalProperties": false,
+      "description": "Roof pitch as rise over run, e.g. 3:12.",
+      "properties": {
+        "rise": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rise",
+        "run"
+      ],
+      "type": "object"
+    },
+    "PixelPoint": {
+      "additionalProperties": false,
+      "description": "A pixel position in an underlay image.",
+      "properties": {
+        "x": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Placement": {
+      "description": "How an occurrence is placed (6.3).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "elevation": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "floor",
+              "type": "string"
+            },
+            "rotation": {
+              "$ref": "#/$defs/QuarterTurns"
+            },
+            "x": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "y": {
+              "$ref": "#/$defs/Sourced"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y",
+            "rotation",
+            "elevation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "elevation": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "wall_mounted",
+              "type": "string"
+            },
+            "offset": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "side": {
+              "$ref": "#/$defs/WallSide"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall",
+            "side",
+            "reference",
+            "offset",
+            "elevation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ceiling_mounted",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "y": {
+              "$ref": "#/$defs/Sourced"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Point": {
+      "additionalProperties": false,
+      "description": "A point in plan.",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "description": "The project (IfcProject).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "PropertyValue": {
+      "description": "Free-form property values: no decimals (Q-8).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "string": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "string"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "integer": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "integer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "boolean"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "length": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "length"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Provenance": {
+      "description": "How a value entered beyond its source (6.6).",
+      "oneOf": [
+        {
+          "const": "transcribed",
+          "description": "Read from the underlay of the paper plan.",
+          "type": "string"
+        }
+      ]
+    },
+    "QuarterTurns": {
+      "maximum": 3,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "Reference": {
+      "description": "A geometric reference that dimensions and constraints name (6.2).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "node",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`boundary` indexes layer boundaries left to right: 0 is the left\nface, the number of layers is the right face.",
+          "properties": {
+            "boundary": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "wall_face",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/WallSide"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall",
+            "side",
+            "boundary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wall_center",
+              "type": "string"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "$ref": "#/$defs/OpeningEdge"
+            },
+            "kind": {
+              "const": "opening_edge",
+              "type": "string"
+            },
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "opening",
+            "edge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_edge",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/ItemSide"
+            }
+          },
+          "required": [
+            "kind",
+            "item",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_center",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "item"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "datum": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "datum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "datum"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Roof": {
+      "additionalProperties": false,
+      "description": "A shed roof (6.5). With a pitch, the derived height is stored with\nsource Derived (Q-7).",
+      "properties": {
+        "fascia_depth": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "footprint": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "high_edge_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "ledger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A face of an existing wall where the high edge ends."
+        },
+        "low_edge_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "material_slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "description": "Material per named slot, e.g. \"roofing\", \"fascia\", \"soffit\".",
+          "type": "object"
+        },
+        "overhang": {
+          "$ref": "#/$defs/Overhang"
+        },
+        "pitch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced4"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope_direction": {
+          "$ref": "#/$defs/Sourced3",
+          "description": "The direction the roof slopes down; derived when a ledger is named."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "storey",
+        "footprint",
+        "slope_direction",
+        "high_edge_height",
+        "low_edge_height",
+        "overhang",
+        "thickness",
+        "fascia_depth",
+        "material_slots"
+      ],
+      "type": "object"
+    },
+    "Slab": {
+      "additionalProperties": false,
+      "description": "A floor slab (IfcSlab).",
+      "properties": {
+        "boundary": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "storey",
+        "boundary",
+        "thickness",
+        "elevation"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "Where a value came from (spec 7.2).",
+      "enum": [
+        "user_stated",
+        "measured",
+        "derived",
+        "proposed",
+        "imported"
+      ],
+      "type": "string"
+    },
+    "Sourced": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Sourced2": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Sourced3": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Direction"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Sourced4": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Pitch"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Space": {
+      "additionalProperties": false,
+      "description": "A space (IfcSpace). The boundary is derived and stored (Q-7).",
+      "properties": {
+        "boundary": {
+          "items": {
+            "$ref": "#/$defs/Point"
+          },
+          "type": "array"
+        },
+        "finishes": {
+          "$ref": "#/$defs/Finishes"
+        },
+        "name": {
+          "type": "string"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "storey",
+        "name",
+        "boundary",
+        "finishes"
+      ],
+      "type": "object"
+    },
+    "Storey": {
+      "additionalProperties": false,
+      "description": "A storey (IfcBuildingStorey).",
+      "properties": {
+        "default_ceiling_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "floor_to_floor": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "elevation",
+        "floor_to_floor",
+        "default_ceiling_height"
+      ],
+      "type": "object"
+    },
+    "Underlay": {
+      "additionalProperties": false,
+      "description": "A calibrated raster underlay of the paper plan (6.6). Display only.",
+      "properties": {
+        "calibration": {
+          "$ref": "#/$defs/KnownDistance",
+          "description": "Sets the scale."
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalibrationCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "heading": {
+          "$ref": "#/$defs/Millidegrees",
+          "description": "World heading of the direction from `pixel_a` to `pixel_b`."
+        },
+        "image": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Point",
+          "description": "Where `calibration.pixel_a` lies in the world."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "name",
+        "storey",
+        "image",
+        "calibration",
+        "origin",
+        "heading"
+      ],
+      "type": "object"
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VariantKind": {
+      "description": "What a variant slot swaps.",
+      "enum": [
+        "material",
+        "model",
+        "lighting"
+      ],
+      "type": "string"
+    },
+    "VariantSlot": {
+      "additionalProperties": false,
+      "description": "A set of interchangeable options on an owner entity.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/VariantKind"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "selected": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "owner",
+        "kind",
+        "options",
+        "selected"
+      ],
+      "type": "object"
+    },
+    "Wall": {
+      "additionalProperties": false,
+      "description": "A wall (IfcWall).",
+      "properties": {
+        "base_offset": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "function": {
+          "$ref": "#/$defs/Function"
+        },
+        "join_priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "label": {
+          "$ref": "#/$defs/Label"
+        },
+        "layer_set": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "left_extent": {
+          "$ref": "#/$defs/Sourced",
+          "description": "From the reference line to the left face (6.1)."
+        },
+        "node_a": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "node_b": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "top": {
+          "$ref": "#/$defs/WallTop"
+        }
+      },
+      "required": [
+        "label",
+        "storey",
+        "node_a",
+        "node_b",
+        "layer_set",
+        "left_extent",
+        "base_offset",
+        "top",
+        "join_priority",
+        "function"
+      ],
+      "type": "object"
+    },
+    "WallSide": {
+      "description": "A side of a wall, looking from node_a to node_b (6.1).",
+      "enum": [
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "WallTop": {
+      "description": "Where a wall's top is.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The storey's floor-to-floor height.",
+          "properties": {
+            "kind": {
+              "const": "storey",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An explicit height above the wall's base.",
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "height",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "height"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The whole project document.",
+  "properties": {
+    "assets": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Asset"
+      },
+      "type": "object"
+    },
+    "building": {
+      "$ref": "#/$defs/Building"
+    },
+    "camera_bookmarks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CameraBookmark"
+      },
+      "type": "object"
+    },
+    "ceilings": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Ceiling"
+      },
+      "type": "object"
+    },
+    "constraints": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Constraint"
+      },
+      "type": "object"
+    },
+    "datums": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Datum"
+      },
+      "type": "object"
+    },
+    "default_walk_start": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "element_types": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ElementType"
+      },
+      "type": "object"
+    },
+    "features": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Feature"
+      },
+      "type": "object"
+    },
+    "labels": {
+      "$ref": "#/$defs/LabelAllocator",
+      "description": "Label counters, so labels are never reused across save and load (5.5)."
+    },
+    "layer_sets": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LayerSet"
+      },
+      "type": "object"
+    },
+    "materials": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Material"
+      },
+      "type": "object"
+    },
+    "nodes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Node"
+      },
+      "type": "object"
+    },
+    "occurrences": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Occurrence"
+      },
+      "type": "object"
+    },
+    "openings": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Opening"
+      },
+      "type": "object"
+    },
+    "project": {
+      "$ref": "#/$defs/Project"
+    },
+    "roofs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Roof"
+      },
+      "type": "object"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "slabs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Slab"
+      },
+      "type": "object"
+    },
+    "spaces": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Space"
+      },
+      "type": "object"
+    },
+    "storeys": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Storey"
+      },
+      "type": "object"
+    },
+    "underlays": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Underlay"
+      },
+      "type": "object"
+    },
+    "variant_slots": {
+      "additionalProperties": {
+        "$ref": "#/$defs/VariantSlot"
+      },
+      "type": "object"
+    },
+    "walls": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Wall"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "building",
+    "storeys",
+    "datums",
+    "nodes",
+    "walls",
+    "layer_sets",
+    "openings",
+    "slabs",
+    "ceilings",
+    "spaces",
+    "materials",
+    "element_types",
+    "occurrences",
+    "features",
+    "constraints",
+    "variant_slots",
+    "assets",
+    "roofs",
+    "underlays",
+    "camera_bookmarks",
+    "labels"
+  ],
+  "title": "Document",
+  "type": "object"
+}

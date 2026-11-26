@@ -7,8 +7,11 @@
 //! followed by its UTF-8 bytes. The length prefixes make the encoding
 //! injective, so distinct triples never share a name.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 
 /// The namespace for every derived id: UUIDv5 of the URL
 /// `https://github.com/FusionAtom360/AIArchViz` under the RFC 4122 URL
@@ -20,8 +23,21 @@ pub const PROJECT_NAMESPACE: Uuid = Uuid(uuid::Uuid::from_bytes([
 /// The IFC base-64 alphabet (IFC 4.3.2.0, 8.21.2.2.1).
 const IFC_BASE64: &[u8; 64] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
 
-/// An entity identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An entity identifier. Serialized as a lowercase hyphenated string.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    JsonSchema,
+)]
+#[serde(transparent)]
 pub struct Uuid(uuid::Uuid);
 
 impl Uuid {
@@ -74,8 +90,12 @@ impl fmt::Display for Uuid {
     }
 }
 
-/// A human label such as `W-007` or `EQ-012`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A human label such as `W-007` or `EQ-012`. Serialized as that string;
+/// only the canonical form (the one [`fmt::Display`] prints) parses.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String", into = "String")]
 pub struct Label {
     prefix: String,
     number: u32,
@@ -89,6 +109,51 @@ impl Label {
     pub const fn number(&self) -> u32 {
         self.number
     }
+}
+
+impl From<Label> for String {
+    fn from(label: Label) -> String {
+        label.to_string()
+    }
+}
+
+impl TryFrom<String> for Label {
+    type Error = LabelError;
+
+    /// Parses `PREFIX-NNN`, accepting only the canonical spelling.
+    fn try_from(text: String) -> Result<Self, LabelError> {
+        let invalid = || LabelError::NotCanonical(text.clone());
+        let (prefix, digits) = text.split_once('-').ok_or_else(invalid)?;
+        if !valid_prefix(prefix) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        let number: u32 = digits.parse().map_err(|_| invalid())?;
+        let label = Label {
+            prefix: prefix.to_string(),
+            number,
+        };
+        if number == 0 || label.to_string() != text {
+            return Err(invalid());
+        }
+        Ok(label)
+    }
+}
+
+impl JsonSchema for Label {
+    fn schema_name() -> Cow<'static, str> {
+        "Label".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[A-Z]+-(00[1-9]|0[1-9][0-9]|[1-9][0-9]{2,})$"
+        })
+    }
+}
+
+fn valid_prefix(prefix: &str) -> bool {
+    !prefix.is_empty() && prefix.bytes().all(|b| b.is_ascii_uppercase())
 }
 
 impl fmt::Display for Label {
@@ -105,6 +170,8 @@ pub enum LabelError {
     InvalidPrefix(String),
     /// Every number for this prefix has been issued.
     Exhausted(String),
+    /// Text that is not a label in canonical form, such as `W-7`.
+    NotCanonical(String),
 }
 
 impl fmt::Display for LabelError {
@@ -114,6 +181,7 @@ impl fmt::Display for LabelError {
                 write!(f, "label prefix {p:?} must be ASCII uppercase letters")
             }
             LabelError::Exhausted(p) => write!(f, "no labels left for prefix {p}"),
+            LabelError::NotCanonical(t) => write!(f, "{t:?} is not a label such as W-007"),
         }
     }
 }
@@ -121,8 +189,13 @@ impl fmt::Display for LabelError {
 impl std::error::Error for LabelError {}
 
 /// Issues labels per prefix. Numbers only ever increase, so a label is never
-/// reissued, even after the entity that held it is deleted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// reissued, even after the entity that held it is deleted. Serialized as
+/// the map from prefix to the last number issued, so the guarantee survives
+/// saving and loading.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, JsonSchema,
+)]
+#[serde(transparent)]
 pub struct LabelAllocator {
     /// The last number issued for each prefix.
     last: BTreeMap<String, u32>,
@@ -135,7 +208,7 @@ impl LabelAllocator {
 
     /// The next unused label for `prefix`.
     pub fn allocate(&mut self, prefix: &str) -> Result<Label, LabelError> {
-        if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_uppercase()) {
+        if !valid_prefix(prefix) {
             return Err(LabelError::InvalidPrefix(prefix.to_string()));
         }
         let number = self

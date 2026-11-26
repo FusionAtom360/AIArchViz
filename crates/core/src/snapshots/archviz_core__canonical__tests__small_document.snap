@@ -1,0 +1,6 @@
+---
+source: crates/core/src/canonical.rs
+expression: text.into_bytes()
+extension: json
+snapshot_kind: binary
+---

@@ -52,3 +52,33 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) echo is exactly format_length; (b) echo is format_length, and for an off-grid value it adds the exact stored value in millimeters, plus the input rounding from Q-1 when there was any; (c) something else.
 - Recommendation: (b). On grid: `10'-4 1/2"`. Off grid: `~0'-0 1/2" (exact 12 mm)`. Rounded input: `~0'-0" (exact 0.198438 mm, rounded 0.5 nm from input)`. Millimeters print with trailing zeros removed.
 - Answer: (b) canonical text, plus exact millimeters for off-grid values and the input rounding when any (owner, 2026-11-26).
+
+## Q-4: Field-level provenance (T-104, status: answered)
+- Context: P6 says "every value and asset records its origin and fidelity"; 6.4 says every default is "applied with status Proposed"; 7.4 and 11.3 require listing every Proposed item. The section 6 table lists provenance only on Constraint (status, provenance) and Asset. So it is unclear whether entity parameters such as wall layer thickness, opening sill or storey height carry their own source.
+- Options: (a) every settable dimensional or design parameter is a `Sourced<T> { value, source }` with source from 7.2 (UserStated, Measured, Derived, Proposed, Imported); ids, references and enums stay plain; (b) provenance only on Constraint and Asset, with Proposed values tracked in a separate document-level list keyed by (entity id, field name); (c) no provenance outside constraints in T-104, deferred to a later task.
+- Recommendation: (a). The Proposed list for 7.4 and 11.3 becomes a pure scan of the document, values cannot lose their source when edited, and the cost is a slightly larger JSON.
+- Answer: (a) Sourced<T> per settable parameter (owner, 2026-11-26).
+
+## Q-5: Angle representation without floating point (T-104, status: answered)
+- Context: Occurrence rotation (D-5: multiples of 90 degrees), CameraBookmark heading (12.6) and the default walk start need angles; core forbids f32/f64.
+- Options: (a) rotation as an enum of quarter turns counterclockwise (0, 1, 2, 3); heading as integer millidegrees in [0, 360000), 0 = +X (east), counterclockwise; (b) both as integer millidegrees, with rotation validated to multiples of 90,000; (c) heading as a quarter-turn too.
+- Recommendation: (a). Rotation cannot hold an illegal value, and a camera heading needs finer steps than 90 degrees; 0.001 degree is far below anything visible.
+- Answer: (a) quarter-turn rotation, integer millidegree heading (owner, 2026-11-26).
+
+## Q-6: Entities needed elsewhere but missing from the section 6 table (T-104, status: answered)
+- Context: the task asks for "every entity in spec section 6, including Roof, Underlay and CameraBookmark". Other sections also need: Material (1.4 "materials", LayerSet layers name a material, 12.4), light data (11.3: type, lumens, color temperature, optional IES), the default walk start (12.6), the label counters that make labels never reused across save and load (5.5, T-103), and the baseline snapshot of 6.7.
+- Options: (a) add Material {name, asset, tile size, properties}; light data as an optional `light` block on Occurrence {kind, lumens, kelvin, ies asset}; `default_walk_start` as a bookmark id; label counters stored in the document; the baseline snapshot kept outside the document, in the log and snapshot store of T-105; (b) the same but the baseline snapshot stored inside the document; (c) leave all of these to the tasks that use them.
+- Recommendation: (a). Every item is required by a cited section; the baseline is a whole earlier document, so storing it inside the document would nest documents and double the file.
+- Answer: (a) add them; baseline snapshot outside the document (owner, 2026-11-26).
+
+## Q-7: Store derived values in the document (T-104, status: answered)
+- Context: section 6 lists derived values as entity fields: Node x, y "(solved)" and "derived join type", Space "derived boundary", Feature "derived children". The canonical document must be byte-identical for a given command log either way.
+- Options: (a) store them: the document holds solved node positions, join types, space boundaries and feature children, rewritten by each command; (b) store only inputs and recompute derived values on load.
+- Recommendation: (a). Exports, diffs (8.3) and queries read them directly; they are deterministic, so byte-identity holds, and a stored value lets a diff show before and after without re-solving the old state.
+- Answer: (a) store derived values (owner, 2026-11-26).
+
+## Q-8: Representation choices made in T-104 unless you object (T-104, status: answered)
+- Context: these follow from the spec but are not spelled out. Listed for review rather than decided silently.
+- Choices: lengths are integer nanometers; ids are lowercase hyphenated UUID strings; each entity kind is a map keyed by id (sorted); enums are snake_case strings; references (6.2) and placements (6.3) are tagged objects `{"kind": ...}`; ElementType properties and Feature parameters are maps of string to one of string, integer, boolean, length (no decimals); lumens and kelvin are integers; asset content hashes are `sha256:<hex>`; pitch is integer rise and run; roof eave overhang is one value per compass side (+X, -X, +Y, -Y) applied to every footprint edge facing that way; clearance zones are per-side extents (front, back, left, right) around the footprint; schema_version starts at 1; unknown JSON fields are rejected on parse. Golden files: the small document is an insta binary snapshot (pure JSON file), and schemas/document.schema.json is regenerated by `cargo xtask golden` and checked by a test.
+- Recommendation: accept as listed.
+- Answer: accepted as listed (owner, 2026-11-26).

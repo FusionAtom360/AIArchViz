@@ -7,7 +7,7 @@ use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: cargo xtask <check | golden>
   check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
-  golden  regenerate golden files (placeholder until a task adds golden tests)";
+  golden  regenerate schemas/document.schema.json and the insta snapshots";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -68,8 +68,29 @@ fn check() -> Result<(), String> {
     Ok(())
 }
 
+/// Regenerates every golden file. Review the diff by hand before committing.
 fn golden() -> Result<(), String> {
-    println!("xtask golden: no golden files are defined yet; nothing to regenerate");
+    let root = workspace_root();
+    step("schemas/document.schema.json", || {
+        let schema = archviz_core::document_schema_json().map_err(|e| e.to_string())?;
+        let path = root.join("schemas").join("document.schema.json");
+        std::fs::write(&path, schema).map_err(|e| format!("{}: {e}", path.display()))
+    })?;
+    step("insta snapshots (archviz-core)", || {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = Command::new(cargo)
+            .args(["test", "-p", "archviz-core", "--locked"])
+            .env("INSTA_UPDATE", "always")
+            .current_dir(&root)
+            .status()
+            .map_err(|e| format!("could not run cargo test: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("cargo test exited with {status}"))
+        }
+    })?;
+    println!("xtask golden: done; review `git diff` before committing");
     Ok(())
 }
 

@@ -14,8 +14,21 @@ const NM_PER_FOOT: i64 = 12 * NM_PER_INCH;
 /// Nanometers per millimeter.
 const NM_PER_MILLIMETER: i64 = 1_000_000;
 
-/// A length in nanometers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A length in nanometers. Serialized as a bare JSON integer.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(transparent)]
 pub struct Length(i64);
 
 /// Why a length operation has no result.
