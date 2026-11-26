@@ -1,0 +1,9 @@
+[package]
+name = "archviz-agent"
+description = "C4 agent: agent loop and provider adapters."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

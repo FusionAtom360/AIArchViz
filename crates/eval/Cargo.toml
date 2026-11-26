@@ -1,0 +1,9 @@
+[package]
+name = "archviz-eval"
+description = "Evaluation harness: case files and runner."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

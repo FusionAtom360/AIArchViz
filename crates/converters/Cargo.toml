@@ -1,0 +1,9 @@
+[package]
+name = "archviz-converters"
+description = "C6 converters: sandboxed runners for CAD, mesh and generator tools."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

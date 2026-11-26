@@ -1,0 +1,13 @@
+[package]
+name = "archviz-cli"
+description = "C2 cli: JSON in, JSON out."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "archviz"
+path = "src/main.rs"
+
+[lints]
+workspace = true
