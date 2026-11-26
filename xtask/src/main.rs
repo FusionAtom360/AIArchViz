@@ -1,3 +1,106 @@
 //! Workspace tooling: cargo xtask check, golden, ue-build, package.
 
-fn main() {}
+mod float_lint;
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+const USAGE: &str = "usage: cargo xtask <check | golden>
+  check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
+  golden  regenerate golden files (placeholder until a task adds golden tests)";
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
+        Some("check") => check(),
+        Some("golden") => golden(),
+        _ => Err(USAGE.to_string()),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs every gate in order and stops at the first failure.
+fn check() -> Result<(), String> {
+    let root = workspace_root();
+    step("float lint (crates/core)", || float_lint_step(&root))?;
+    cargo(&root, "fmt", &["fmt", "--all", "--", "--check"])?;
+    cargo(
+        &root,
+        "clippy",
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )?;
+    cargo(&root, "test", &["test", "--workspace", "--locked"])?;
+    cargo(
+        &root,
+        "wasm32 build (archviz-core)",
+        &[
+            "build",
+            "-p",
+            "archviz-core",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--locked",
+        ],
+    )?;
+    cargo(&root, "cargo deny", &["deny", "check"])?;
+    println!("xtask check: all steps passed");
+    Ok(())
+}
+
+fn golden() -> Result<(), String> {
+    println!("xtask golden: no golden files are defined yet; nothing to regenerate");
+    Ok(())
+}
+
+fn step(name: &str, run: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    println!("==> {name}");
+    run().map_err(|e| format!("xtask check: step `{name}` failed\n{e}"))
+}
+
+fn cargo(root: &Path, name: &str, args: &[&str]) -> Result<(), String> {
+    step(name, || {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = Command::new(cargo)
+            .args(args)
+            .current_dir(root)
+            .status()
+            .map_err(|e| format!("could not run cargo {}: {e}", args.join(" ")))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("cargo {} exited with {status}", args.join(" ")))
+        }
+    })
+}
+
+fn float_lint_step(root: &Path) -> Result<(), String> {
+    let core = root.join("crates").join("core");
+    let findings =
+        float_lint::scan_dir(&core).map_err(|e| format!("reading {}: {e}", core.display()))?;
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = findings.iter().map(ToString::to_string).collect();
+    Err(lines.join("\n"))
+}
