@@ -104,3 +104,38 @@ fn float_lint_step(root: &Path) -> Result<(), String> {
     let lines: Vec<String> = findings.iter().map(ToString::to_string).collect();
     Err(lines.join("\n"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_root;
+
+    /// T-004: CI runs `cargo xtask check` on Windows for every push.
+    #[test]
+    fn ci_workflow_runs_check_on_windows_for_every_push() -> Result<(), String> {
+        let path = workspace_root().join(".github/workflows/ci.yml");
+        let yaml =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let lines: Vec<&str> = yaml.lines().map(str::trim_end).collect();
+        assert!(
+            lines.contains(&"on:"),
+            "workflow has no `on:` trigger block"
+        );
+        assert!(
+            lines.contains(&"  push:"),
+            "workflow does not trigger on push"
+        );
+        assert!(
+            !yaml.contains("branches:") && !yaml.contains("paths:"),
+            "push trigger must not be filtered by branch or path"
+        );
+        assert!(
+            yaml.contains("runs-on: windows-latest"),
+            "job must run on Windows"
+        );
+        assert!(
+            yaml.contains("run: cargo xtask check"),
+            "job must run `cargo xtask check`"
+        );
+        Ok(())
+    }
+}
