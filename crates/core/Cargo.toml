@@ -11,3 +11,6 @@ workspace = true
 
 [dev-dependencies]
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+
+[dependencies]
+uuid = { version = "1.29.3", default-features = false, features = ["v5"] }
