@@ -4,6 +4,7 @@ description = "Workspace tooling: cargo xtask check, golden, ue-build, package."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "xtask"
