@@ -250,8 +250,8 @@ pub enum Reference {
     Node {
         node: Uuid,
     },
-    /// `boundary` indexes layer boundaries left to right: 0 is the left
-    /// face, the number of layers is the right face.
+    /// `boundary` counts layer boundaries from the `side` finish face
+    /// inward: 0 is that face, the number of layers is the opposite face (Q-16).
     WallFace {
         wall: Uuid,
         side: WallSide,
@@ -389,6 +389,8 @@ pub struct Wall {
     pub storey: Uuid,
     pub node_a: Uuid,
     pub node_b: Uuid,
+    /// From node_a to node_b; set at creation, never changed by solving (Q-12).
+    pub direction: Direction,
     pub layer_set: Uuid,
     /// From the reference line to the left face (6.1).
     pub left_extent: Sourced<Length>,
@@ -641,6 +643,7 @@ pub enum Provenance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConstraintKind {
+    /// coordinate(b) - coordinate(a) = value along `axis` (signed, Q-13).
     Distance {
         a: Reference,
         b: Reference,
@@ -654,12 +657,11 @@ pub enum ConstraintKind {
         axis: Axis,
     },
     /// Two Distance constraints, by id, have equal values.
-    Equal {
-        first: Uuid,
-        second: Uuid,
-    },
+    Equal { first: Uuid, second: Uuid },
+    /// The reference's coordinate on `axis` equals `value` (Q-13).
     Fixed {
         reference: Reference,
+        axis: Axis,
         value: Length,
     },
     /// Checked after solving, not solved (7.1).

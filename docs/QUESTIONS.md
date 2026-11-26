@@ -100,3 +100,33 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) envelope {sequence (1, 2, 3, ...), timestamp_ms (integer milliseconds since the Unix epoch, supplied by the caller), actor (free text, e.g. "user" or an agent session id), event}; events are Commit {commands} (atomic, 8.4), Undo and Redo; a new commit clears the redo stack; idempotency_key and command id are UUIDs chosen by the caller; new ids are `Uuid::derive(idempotency_key, "command", ordinal)`; a commit containing an idempotency key already in the log is rejected with DuplicateCommand naming the earlier sequence, and nothing changes; (b) the same, but a repeated key is accepted silently as a no-op; (c) timestamps as RFC 3339 strings.
 - Recommendation: (a). Integer time keeps the log free of parsing rules; rejecting a repeat tells the caller exactly what happened instead of hiding it.
 - Answer: (a) integer-ms envelope; repeated idempotency key rejected with DuplicateCommand (owner, 2026-11-26).
+
+## Q-12: Where a wall's orientation comes from (T-106, status: answered)
+- Context: Layer A needs each wall's axis (X or Y) and direction (node_a to node_b) to know which coordinate its reference line and faces lie on and which side is left (6.1). The Wall entity has no orientation field; D-5 says every wall is parallel to X or Y.
+- Options: (a) add `direction` (pos_x, neg_x, pos_y, neg_y) to Wall, set at creation and never changed by solving; the validity check (7.7) can then catch a move that flips a wall; (b) derive it from the stored node positions on each solve.
+- Recommendation: (a). Orientation becomes intent rather than a by-product of the last solve, so a move that drags node_b past node_a is reported instead of silently swapping left and right.
+- Answer: (a) stored direction field on Wall (owner, 2026-11-26).
+
+## Q-13: Sign of Distance and of Fixed's axis (T-106, status: answered)
+- Context: 7.1 gives Distance(refA, refB, axis, value) without a sign rule; an unsigned distance |b - a| = v has two solutions and cannot be solved by union-find. Fixed(ref, value) has no axis, so Fixed on a Node or a point Datum is ambiguous.
+- Options: (a) Distance is signed: coordinate(refB) - coordinate(refA) = value along `axis`; Align is Distance 0; Fixed gains an `axis` field (schema change); a reference whose plane is not perpendicular to the given axis (a face of an X-direction wall used on the X axis) is an error; (b) unsigned distances with a direction inferred from current positions.
+- Recommendation: (a). It is exact and order-free; the UI and agent can present the absolute value and direction.
+- Answer: (a) signed distance; Fixed gains an axis (owner, 2026-11-26).
+
+## Q-14: What Equal(distance1, distance2) means (T-106, status: answered)
+- Context: in the model every Distance carries a value, so "equal" either copies a value or only checks one.
+- Options: (a) Equal(first, second) makes `second` take the resolved value of `first`; second's own stored value becomes Derived; a cycle of Equals is a Conflict; (b) Equal only checks that two driving distances have the same value, raising a Conflict otherwise; (c) Equal ties two distances whose values are both free, which needs more than union-find (Layer B).
+- Recommendation: (a). It is the useful case ("same spacing as that one") and stays within Layer A.
+- Answer: (a) second copies first; cycles are Conflicts (owner, 2026-11-26).
+
+## Q-15: Which constraint is the redundant one (T-106, status: answered)
+- Context: 7.5 turns a redundant Measured constraint into Reference (within tolerance) or raises a Conflict naming both (beyond). Which of two clashing constraints is "redundant" depends on the order they are processed in, and results must not depend on insertion order (7.3).
+- Options: (a) process driving constraints in a fixed order: by source authority (UserStated, Imported, Measured, Derived, Proposed, following D-11), then by constraint id; the later one in that order is the redundant one; (b) by constraint id only.
+- Recommendation: (a). A measured or proposed value then never overrides a user-stated one, and the order is total, so shuffled input gives identical results.
+- Answer: (a) authority order, then id (owner, 2026-11-26).
+
+## Q-16: Solver scope and provisional positions in T-106 (T-106, status: answered)
+- Context: 6.2 lists seven reference kinds; openings (T-108) and occurrences (T-111) come later. 7.4 requires a provisional model even when underconstrained.
+- Options: (a) T-106 solves Node, WallFace, WallCenter and Datum references; OpeningEdge, ItemEdge and ItemCenter return UnsupportedReference until T-108 and T-111 extend the solver; an underconstrained class keeps its translation from the stored position of its lowest-id member, so a provisional model always exists; WallFace boundary indexes count from the named side's finish face inward (0 = that side's face); Reference-status constraints report their computed value and residual when both ends are in one class; (b) all seven kinds now, with item and opening geometry defined here.
+- Recommendation: (a). Each later task adds its own reference kinds with its own geometry and tests.
+- Answer: (a) as listed (owner, 2026-11-26).
