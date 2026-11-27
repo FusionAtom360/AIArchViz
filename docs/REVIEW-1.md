@@ -14,6 +14,8 @@ Adversarial review, 2026-11-27, of T-101 to T-122b. No code was changed.
 | High | 5 | H-1 to H-5 |
 | Medium | 10 | M-1 to M-10 |
 
+**Status, 2026-11-27: every finding is closed** (C-1 to C-2 and H-1 to H-5 by T-190 to T-195; M-1, M-2, M-4, M-5, M-6, M-9, M-10 by T-197 to T-199e; M-3 by the validator re-run in DEC-2; M-7, M-8 and the M-10 prompt by DEC-8 to DEC-10). Per Q-74 (b), `phase-1` stays at `737f67c` and `phase-1-review` marks the commit that closes the review.
+
 Determinism held in every experiment below. The worst problems are (1) the 5.3 grid rule is only enforced in the text parser, not in commands, and (2) the phase exit criteria are not met yet.
 
 ---
@@ -98,11 +100,11 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 ## Medium
 
 ### M-1: No property test for inverse deltas (spec 13.2)
-- **Status: open**, planned as T-197.
+- **Status: closed** by T-197 (`f9dc32d`, 2026-11-27). `inverse` in core gives the inverse of MoveWall, MoveOpening, MoveOccurrence and SetConstraintValue (DEC-11); covered by the proptest `a_command_then_its_inverse_is_byte_identical`.
 13.2 says: "for move and set-value commands the inverse delta does too [restore a byte-identical document]". The repository has no such test: `grep -i inverse crates/core/src` finds nothing. The undo tests (`undo_restores_the_exact_prior_state`, `replay_and_undo_are_exact`) cover stored-state undo, not applying the inverse delta of MoveWall, MoveOpening, MoveOccurrence or SetConstraintValue.
 
 ### M-2: The T-106 timing requirement is never enforced
-- **Status: open**, planned as T-198.
+- **Status: closed** by T-198 (`5ea84ec`, 2026-11-27). `cargo xtask check` runs `solver_500_mixed_elements_under_50_ms` in release on 250 walls, 125 windows and 125 occurrences with 1,500 constraints, and fails if the maximum reaches 50 ms.
 - **Where:** `xtask/src/main.rs:358`.
 - **Problem:** `solver_500_elements_under_50_ms` is `#[ignore]`, and `cargo xtask check` runs only debug tests. The "under 50 ms in release" Done-when line rests on one manual measurement in PROGRESS.md.
 - **Also:** the workload is "500 walls / 1,500 constraints". It is not 500 mixed elements with openings and occurrences, which the solver now also handles (T-108, T-111).
@@ -135,7 +137,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
   - I found no input that reaches an out-of-bounds index. Nothing but review guards those paths, though.
 
 ### M-6: ExistingConditionEdit does not show the baseline value (spec 6.7)
-- **Status: open**, planned as T-199c.
+- **Status: closed** by T-199c (`0ed860c`, 2026-11-27). `Flag::ExistingConditionEdit` carries the baseline value of each changed path; covered by `a_second_edit_to_an_existing_wall_shows_the_baseline_value`.
 - **Where:** `crates/core/src/proposal.rs:139` and `:600`.
 - **Spec:** 6.7 says the flag "shows the original value from the baseline snapshot (the first committed state, or a snapshot the user creates)".
 - **What it does:** the flag carries only `{collection, id}`. The diff's `before` is the head value, not the baseline.
