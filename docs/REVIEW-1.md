@@ -73,6 +73,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** crash-consistency of the log on disk.
 
 ### H-4: `new` can wipe an existing log (check-then-lock race)
+- **Status: open**, planned as T-194.
 - **Where:** `crates/cli/src/store.rs:51-62`.
   - Line 51 checks for `genesis.json` before line 58 takes the lock.
   - After taking the lock it does not check again.

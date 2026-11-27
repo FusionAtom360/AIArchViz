@@ -307,6 +307,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: `store::open` reads log.jsonl as bytes and replays only the part up to and including its last newline; a final segment with no trailing newline is an uncommitted append and is ignored, whatever bytes it holds. The project remembers the committed length, and `append` truncates the file to it before writing the next line, then flushes as before. A newline-terminated line that does not parse is still CORRUPT_PROJECT, and subcommands that do not commit never write the log.
 - Done when: tests on disk show that a log ending in a torn line (a partial entry, and a cut inside a multibyte UTF-8 character) opens with every complete entry replayed, that a read-only subcommand leaves the file byte-identical, that the next commit replaces the torn tail so the log holds only complete lines and replays to the same document as an untorn log, and that a bad newline-terminated line is still CORRUPT_PROJECT.
 
+**T-194 `new` never overwrites a project.** Spec 3.1; Q-47; REVIEW-1 H-4. Depends on T-193.
+
+- Build: `store::create` takes the project lock before it decides anything, then refuses with PROJECT_EXISTS when the folder already holds genesis.json or log.jsonl, and creates both files with create-new semantics so an existing file is never truncated or replaced. A folder holding only project.lock is still a fresh folder.
+- Done when: tests show that `new` against a folder whose log has entries but whose genesis.json is missing gets PROJECT_EXISTS and leaves the log byte-identical; that `new` against an existing project still gets PROJECT_EXISTS; and that concurrent `new` calls on one empty folder leave exactly one winner, every other call getting PROJECT_EXISTS or LOCKED, with the winner's genesis and an empty log on disk.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.
