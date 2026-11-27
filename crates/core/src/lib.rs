@@ -4,6 +4,7 @@ mod canonical;
 mod command;
 mod defaults;
 mod document;
+mod edit;
 mod geometry;
 mod identity;
 mod items;
@@ -17,11 +18,13 @@ mod validity;
 
 pub use canonical::{CanonicalError, document_schema_json, from_canonical_json, to_canonical_json};
 pub use command::{
-    Action, Command, CommandError, CreateNode, CreateOpening, NoArgs, SetProjectUnits, SetStorey,
+    Action, Command, CommandError, CreateNode, CreateOpening, DimensionTarget, Motion,
+    MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
     SetVariantSelection, apply,
 };
 pub use defaults::{CATALOG_VERSION, MIN_JAMB_DISTANCE, OpeningSize, opening_size};
 pub use document::*;
+pub use edit::{Candidate, Case, MoveError, MoveOutcome};
 pub use geometry::{
     GeometryError, OpeningProblem, OpeningViolation, Void, WallGeometry, WallProfile, node_joins,
     opening_violations, update_joins, wall_geometry, wall_profiles,

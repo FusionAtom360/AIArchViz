@@ -17,7 +17,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::document::{
-    Document, JoinType, Node, Opening, OpeningEdge, OpeningKind, Reference, Source, Sourced, Storey,
+    Axis, ConstraintKind, Document, JoinType, Node, Opening, OpeningEdge, OpeningKind, Placement,
+    Reference, Source, Sourced, Storey,
 };
 use crate::identity::Uuid;
 use crate::length::Length;
@@ -79,6 +80,89 @@ pub struct CreateOpening {
     pub sill: Option<Sourced<Length>>,
 }
 
+/// How far a move goes: a signed delta along the axis, or the target
+/// coordinate of the moved reference (Q-39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Motion {
+    Delta { delta: Length },
+    Target { target: Length },
+}
+
+/// Moves a wall across its axis by editing the dimensions that fix it (8.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoveWall {
+    pub wall: Uuid,
+    /// The wall's own face or center whose coordinate `motion` names.
+    pub reference: Reference,
+    pub motion: Motion,
+    /// The constraint the user picked for a ReferenceSemantics ambiguity.
+    pub edit: Option<Uuid>,
+    /// PolicyChoices taken: dimensions that absorb the move (8.7 (b)).
+    pub absorb: Vec<Uuid>,
+}
+
+/// Moves an opening along its host; `motion` names its start edge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoveOpening {
+    pub opening: Uuid,
+    pub motion: Motion,
+    pub edit: Option<Uuid>,
+    pub absorb: Vec<Uuid>,
+}
+
+/// Moves an occurrence's center along one axis (a wall-mounted item only
+/// along its host).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MoveOccurrence {
+    pub occurrence: Uuid,
+    pub axis: Axis,
+    pub motion: Motion,
+    pub edit: Option<Uuid>,
+    pub absorb: Vec<Uuid>,
+}
+
+/// A dimension a move can change (Q-39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DimensionTarget {
+    /// The value of a Distance or Fixed constraint.
+    Constraint { constraint: Uuid },
+    /// An opening's offset from its reference.
+    OpeningOffset { opening: Uuid },
+    /// A wall-mounted occurrence's offset from its reference.
+    OccurrenceOffset { occurrence: Uuid },
+    /// A node's stored coordinate (free classes, Q-38).
+    NodeCoordinate { node: Uuid, axis: Axis },
+    /// A floor or ceiling occurrence's stored center coordinate (Q-38).
+    OccurrenceCoordinate { occurrence: Uuid, axis: Axis },
+}
+
+impl DimensionTarget {
+    /// The entity the dimension belongs to; also how a move's `edit` and
+    /// `absorb` name it.
+    pub fn id(self) -> Uuid {
+        match self {
+            DimensionTarget::Constraint { constraint } => constraint,
+            DimensionTarget::OpeningOffset { opening } => opening,
+            DimensionTarget::OccurrenceOffset { occurrence }
+            | DimensionTarget::OccurrenceCoordinate { occurrence, .. } => occurrence,
+            DimensionTarget::NodeCoordinate { node, .. } => node,
+        }
+    }
+}
+
+/// Sets one dimension (8.2). Moves resolve to these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetConstraintValue {
+    pub target: DimensionTarget,
+    pub value: Length,
+}
+
 /// Sets the unit of bare numbers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,16 +184,16 @@ pub enum Action {
     SplitWall(NoArgs),
     MergeWalls(NoArgs),
     SetWallLayers(NoArgs),
-    MoveWall(NoArgs),
+    MoveWall(MoveWall),
     CreateOpening(CreateOpening),
-    MoveOpening(NoArgs),
+    MoveOpening(MoveOpening),
     PlaceOccurrence(NoArgs),
-    MoveOccurrence(NoArgs),
+    MoveOccurrence(MoveOccurrence),
     RotateOccurrence(NoArgs),
     DeleteEntity(NoArgs),
     AddConstraint(NoArgs),
     RemoveConstraint(NoArgs),
-    SetConstraintValue(NoArgs),
+    SetConstraintValue(SetConstraintValue),
     SetStorey(SetStorey),
     ApplyOperator(NoArgs),
     RemoveOperator(NoArgs),
@@ -197,6 +281,11 @@ pub enum CommandError {
     InvalidOption { slot: Uuid, option: Uuid },
     /// The document could not be solved after the command.
     Solve(SolveError),
+    /// A move must be resolved by `propose` into SetConstraintValue commands (Q-39).
+    Unresolved(&'static str),
+    /// The target is not a dimension that can be set (an Align, an Equal, a
+    /// floor item's offset, and so on).
+    NotADimension(Uuid),
 }
 
 impl fmt::Display for CommandError {
@@ -206,6 +295,10 @@ impl fmt::Display for CommandError {
             CommandError::UnknownEntity(id) => write!(f, "no entity {id}"),
             CommandError::IdCollision(id) => write!(f, "new id {id} already exists"),
             CommandError::Solve(e) => write!(f, "cannot solve: {e}"),
+            CommandError::Unresolved(kind) => {
+                write!(f, "{kind} must be resolved through propose")
+            }
+            CommandError::NotADimension(id) => write!(f, "{id} has no settable dimension"),
             CommandError::InvalidOption { slot, option } => {
                 write!(f, "{option} is not an option of variant slot {slot}")
             }
@@ -214,6 +307,76 @@ impl fmt::Display for CommandError {
 }
 
 impl std::error::Error for CommandError {}
+
+fn set_dimension(doc: &mut Document, args: &SetConstraintValue) -> Result<(), CommandError> {
+    let value = args.value;
+    let stated = |s: &mut Sourced<Length>| {
+        *s = Sourced {
+            value,
+            source: Source::UserStated,
+        };
+    };
+    match args.target {
+        DimensionTarget::Constraint { constraint } => {
+            let c = doc
+                .constraints
+                .get_mut(&constraint)
+                .ok_or(CommandError::UnknownEntity(constraint))?;
+            match &mut c.kind {
+                ConstraintKind::Distance { value: v, .. }
+                | ConstraintKind::Fixed { value: v, .. } => *v = value,
+                _ => return Err(CommandError::NotADimension(constraint)),
+            }
+        }
+        DimensionTarget::OpeningOffset { opening } => {
+            let o = doc
+                .openings
+                .get_mut(&opening)
+                .ok_or(CommandError::UnknownEntity(opening))?;
+            stated(&mut o.offset);
+        }
+        DimensionTarget::OccurrenceOffset { occurrence } => {
+            let o = doc
+                .occurrences
+                .get_mut(&occurrence)
+                .ok_or(CommandError::UnknownEntity(occurrence))?;
+            match &mut o.placement {
+                Placement::WallMounted { offset, .. } => stated(offset),
+                _ => return Err(CommandError::NotADimension(occurrence)),
+            }
+        }
+        DimensionTarget::NodeCoordinate { node, axis } => {
+            let n = doc
+                .nodes
+                .get_mut(&node)
+                .ok_or(CommandError::UnknownEntity(node))?;
+            match axis {
+                Axis::X => n.x = value,
+                Axis::Y => n.y = value,
+            }
+        }
+        DimensionTarget::OccurrenceCoordinate { occurrence, axis } => {
+            let o = doc
+                .occurrences
+                .get_mut(&occurrence)
+                .ok_or(CommandError::UnknownEntity(occurrence))?;
+            match axis {
+                Axis::X => o.center.x = value,
+                Axis::Y => o.center.y = value,
+            }
+            match &mut o.placement {
+                Placement::Floor { x, y, .. } | Placement::CeilingMounted { x, y } => match axis {
+                    Axis::X => x.value = value,
+                    Axis::Y => y.value = value,
+                },
+                Placement::WallMounted { .. } => {
+                    return Err(CommandError::NotADimension(occurrence));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// The document after `command`, or why it cannot be applied. Pure: the
 /// result depends only on the two arguments.
@@ -272,6 +435,10 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
             slot.selected = args.selected;
         }
         Action::SetProjectUnits(args) => doc.project.default_unit = args.default_unit,
+        Action::SetConstraintValue(args) => set_dimension(&mut doc, args)?,
+        Action::MoveWall(_) | Action::MoveOpening(_) | Action::MoveOccurrence(_) => {
+            return Err(CommandError::Unresolved(command.action.kind()));
+        }
         Action::CreateOpening(args) => {
             if !doc.walls.contains_key(&args.host) {
                 return Err(CommandError::UnknownEntity(args.host));
@@ -627,15 +794,11 @@ pub(crate) mod tests {
             Action::SplitWall(n()),
             Action::MergeWalls(n()),
             Action::SetWallLayers(n()),
-            Action::MoveWall(n()),
-            Action::MoveOpening(n()),
             Action::PlaceOccurrence(n()),
-            Action::MoveOccurrence(n()),
             Action::RotateOccurrence(n()),
             Action::DeleteEntity(n()),
             Action::AddConstraint(n()),
             Action::RemoveConstraint(n()),
-            Action::SetConstraintValue(n()),
             Action::ApplyOperator(n()),
             Action::RemoveOperator(n()),
         ]
@@ -644,7 +807,7 @@ pub(crate) mod tests {
     #[test]
     fn the_rest_of_the_v1_set_is_not_yet_implemented() {
         let actions = unimplemented_actions();
-        assert_eq!(actions.len() + 5, 20, "8.2 lists 20 commands");
+        assert_eq!(actions.len() + 9, 20, "8.2 lists 20 commands");
         for action in actions {
             let kind = action.kind();
             assert_eq!(

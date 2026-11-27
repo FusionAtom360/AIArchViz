@@ -22,6 +22,7 @@ use crate::canonical::{CanonicalError, to_canonical_json};
 use crate::command::{Action, Command, CommandError, CreateOpening, apply};
 use crate::defaults::{MIN_JAMB_DISTANCE, opening_size};
 use crate::document::{Document, Function, Placement, Source, Sourced};
+use crate::edit::{Candidate, MoveError, MoveOutcome, request_for, resolve_move};
 use crate::geometry::{GeometryError, update_joins};
 use crate::identity::{PROJECT_NAMESPACE, Uuid};
 use crate::length::Length;
@@ -113,12 +114,14 @@ impl AmbiguityKind {
     }
 }
 
-/// An unresolved choice (9.2): {kind, candidates, default if any}.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An unresolved choice (9.2): {kind, candidates, default if any}. Each
+/// candidate names the dimension it is about, with its resulting edits and
+/// what moves.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ambiguity {
     pub kind: AmbiguityKind,
-    pub candidates: Vec<String>,
-    pub default: Option<String>,
+    pub candidates: Vec<Candidate>,
+    pub default: Option<Uuid>,
 }
 
 /// Something the user should notice before confirming (Q-36).
@@ -163,8 +166,13 @@ pub struct DiffEntry {
 pub struct Proposal {
     pub proposal_id: Uuid,
     pub base_version: u64,
-    /// The action with every value explicit.
+    /// The action as requested.
+    pub action: ProposedAction,
+    /// The action with every value explicit: moves become SetConstraintValue
+    /// commands (Q-39).
     pub resolved: ProposedAction,
+    /// Entities that move as a consequence of a move command (8.7).
+    pub consequences: Vec<Uuid>,
     pub diff: Vec<DiffEntry>,
     pub constraint_status: BTreeMap<Uuid, ConstraintReport>,
     pub conflicts: Vec<Conflict>,
@@ -186,6 +194,7 @@ impl Proposal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposeError {
     Command { index: usize, error: CommandError },
+    Move { index: usize, error: MoveError },
     Derive(DeriveError),
     NothingToUndo,
     NothingToRedo,
@@ -196,6 +205,7 @@ impl fmt::Display for ProposeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProposeError::Command { index, error } => write!(f, "command {index}: {error}"),
+            ProposeError::Move { index, error } => write!(f, "command {index}: {error}"),
             ProposeError::Derive(e) => write!(f, "{e}"),
             ProposeError::NothingToUndo => f.write_str("nothing to undo"),
             ProposeError::NothingToRedo => f.write_str("nothing to redo"),
@@ -282,12 +292,70 @@ fn proposal_id(base_version: u64, action: &ProposedAction) -> Result<Uuid, Canon
 /// Proposes `action` against the head of `history`. Stores nothing.
 pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, ProposeError> {
     let base = history.document();
+    let mut ambiguities = Vec::new();
+    let mut consequences = BTreeSet::new();
+    let mut obstructions = Vec::new();
     let (resolved, after, solution, violations) = match action {
         ProposedAction::Commands { commands } => {
-            let resolved: Vec<Command> = commands.iter().map(resolve).collect();
+            let mut resolved = Vec::new();
             let mut next = base.clone();
-            for (index, c) in resolved.iter().enumerate() {
-                next = apply(&next, c).map_err(|error| ProposeError::Command { index, error })?;
+            for (index, c) in commands.iter().enumerate() {
+                let Some(request) = request_for(&next, &c.action) else {
+                    let r = resolve(c);
+                    next =
+                        apply(&next, &r).map_err(|error| ProposeError::Command { index, error })?;
+                    resolved.push(r);
+                    continue;
+                };
+                let request = request.map_err(|error| ProposeError::Move { index, error })?;
+                // Resolve against the solved state so far (8.7).
+                let current = derive(next.clone()).map_err(ProposeError::Derive)?.document;
+                let edits = match resolve_move(&current, &request)
+                    .map_err(|error| ProposeError::Move { index, error })?
+                {
+                    MoveOutcome::Edits {
+                        edits,
+                        moved,
+                        alternatives,
+                        ..
+                    } => {
+                        consequences.extend(moved);
+                        if !alternatives.is_empty() {
+                            ambiguities.push(Ambiguity {
+                                kind: AmbiguityKind::PolicyChoice,
+                                candidates: alternatives,
+                                default: None,
+                            });
+                        }
+                        edits
+                    }
+                    MoveOutcome::Ambiguous { candidates } => {
+                        ambiguities.push(Ambiguity {
+                            kind: AmbiguityKind::ReferenceSemantics,
+                            candidates,
+                            default: None,
+                        });
+                        Vec::new()
+                    }
+                    MoveOutcome::Obstructed { fixed, delta } => {
+                        obstructions.push(Conflict {
+                            constraint: request.entity,
+                            with: fixed,
+                            residual: Some(delta),
+                        });
+                        Vec::new()
+                    }
+                };
+                for (i, e) in edits.into_iter().enumerate() {
+                    let edit = Command {
+                        id: Uuid::derive(c.id, "edit", &i.to_string()),
+                        idempotency_key: Uuid::derive(c.idempotency_key, "edit", &i.to_string()),
+                        action: Action::SetConstraintValue(e),
+                    };
+                    next = apply(&next, &edit)
+                        .map_err(|error| ProposeError::Command { index, error })?;
+                    resolved.push(edit);
+                }
             }
             let d = derive(next).map_err(ProposeError::Derive)?;
             (
@@ -313,15 +381,19 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
     };
     let diff = diff_documents(base, &after)?;
     let flags = flags(base, &after, &diff);
+    let mut conflicts = solution.conflicts;
+    conflicts.extend(obstructions);
     Ok(Proposal {
-        proposal_id: proposal_id(history.version(), &resolved).map_err(ProposeError::Json)?,
+        proposal_id: proposal_id(history.version(), action).map_err(ProposeError::Json)?,
         base_version: history.version(),
+        action: action.clone(),
         resolved,
+        consequences: consequences.into_iter().collect(),
         diff,
         constraint_status: solution.constraints,
-        conflicts: solution.conflicts,
+        conflicts,
         violations,
-        ambiguities: Vec::new(),
+        ambiguities,
         flags,
     })
 }
@@ -341,7 +413,7 @@ pub fn commit(
     }
     // Proposing again checks the proposal against its id and recomputes
     // what blocks it, so nothing in the caller's copy is trusted.
-    let fresh = propose(history, &proposal.resolved).map_err(CommitError::Propose)?;
+    let fresh = propose(history, &proposal.action).map_err(CommitError::Propose)?;
     if fresh != *proposal {
         return Err(CommitError::Altered);
     }
@@ -647,7 +719,9 @@ fn matches_branch(value: &Value, b: &Value, root: &Value) -> bool {
 mod tests {
     use super::*;
     use crate::command::tests::{cmd, create_node, genesis, set_storey, with_wall};
-    use crate::command::{SetProjectUnits, SetVariantSelection};
+    use crate::command::{
+        DimensionTarget, SetConstraintValue, SetProjectUnits, SetVariantSelection,
+    };
     use crate::document::*;
     use crate::units::ProjectUnit;
 
@@ -680,6 +754,95 @@ mod tests {
                 sill: None,
             }),
         )
+    }
+
+    use crate::command::{Motion, MoveWall};
+    use crate::edit::tests::{center, chain};
+
+    fn move_b(edit: Option<Uuid>, absorb: Vec<Uuid>, wall: Uuid) -> ProposedAction {
+        commands(vec![cmd(
+            40,
+            Action::MoveWall(MoveWall {
+                wall,
+                reference: Reference::WallCenter { wall },
+                motion: Motion::Delta {
+                    delta: Length::from_nanometers(12 * 25_400_000),
+                },
+                edit,
+                absorb,
+            }),
+        )])
+    }
+
+    #[test]
+    fn a_chain_move_commits_as_explicit_edits() -> Result<(), CommitError> {
+        let (doc, [_, b, c], [_, c2, c3], window) = chain();
+        let _ = center(b);
+        let mut history = History::new(doc.clone());
+        let p = propose(&history, &move_b(None, vec![], b)).map_err(CommitError::Propose)?;
+        let mut downstream = vec![c, window];
+        downstream.sort();
+        assert_eq!(p.consequences, downstream);
+        assert_eq!(p.ambiguities.len(), 1);
+        assert_eq!(p.ambiguities[0].kind, AmbiguityKind::PolicyChoice);
+        assert_eq!(
+            p.ambiguities[0]
+                .candidates
+                .iter()
+                .map(|c| c.choice)
+                .collect::<Vec<_>>(),
+            vec![c3]
+        );
+        assert!(!p.blocked());
+        let entry = commit(&mut history, &p, 1_000, "user")?;
+        let Event::Commit { commands } = &entry.event else {
+            return Err(CommitError::Altered);
+        };
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            commands[0].action,
+            Action::SetConstraintValue(SetConstraintValue { target: DimensionTarget::Constraint { constraint }, value })
+                if constraint == c2 && value == Length::from_nanometers(108 * 25_400_000)
+        ));
+        let mut replayed = History::new(doc);
+        replayed.replay(&[entry]).map_err(CommitError::Log)?;
+        assert_eq!(bytes(replayed.document()), bytes(history.document()));
+        Ok(())
+    }
+
+    #[test]
+    fn reference_semantics_blocks_until_answered() -> Result<(), CommitError> {
+        let mut doc = crate::edit::tests::base();
+        let a = crate::edit::tests::wall_at(&mut doc, 1, 120);
+        let c1 = crate::edit::tests::dist(
+            &mut doc,
+            1,
+            crate::edit::tests::datum(crate::edit::tests::WEST),
+            center(a),
+            120,
+        );
+        crate::edit::tests::dist(
+            &mut doc,
+            4,
+            center(a),
+            crate::edit::tests::datum(crate::edit::tests::EAST),
+            120,
+        );
+        let mut history = History::new(doc);
+        let p = propose(&history, &move_b(None, vec![], a)).map_err(CommitError::Propose)?;
+        assert_eq!(
+            p.ambiguities.first().map(|a| a.kind),
+            Some(AmbiguityKind::ReferenceSemantics)
+        );
+        assert!(p.blocked());
+        assert_eq!(
+            commit(&mut history, &p, 1_000, "user"),
+            Err(CommitError::Blocked)
+        );
+        let p = propose(&history, &move_b(Some(c1), vec![], a)).map_err(CommitError::Propose)?;
+        assert!(!p.blocked());
+        commit(&mut history, &p, 1_000, "user")?;
+        Ok(())
     }
 
     #[test]

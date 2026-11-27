@@ -234,6 +234,226 @@ impl Solver for LayerA {
     }
 }
 
+/// What a solver variable stands for (used by move resolution, T-113).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Owner {
+    Ground,
+    Node(Uuid),
+    Opening(Uuid),
+    Occurrence(Uuid),
+}
+
+/// One relation between two variables on an axis: value(b) - value(a) is
+/// fixed. An editable edge's dimension enters it with coefficient `coef`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeKind {
+    /// A wall tie, an Align, or a value copied through an Equal.
+    Rigid,
+    /// A Fixed occurrence held at its stored position.
+    Anchor(Uuid),
+    Editable {
+        target: crate::command::DimensionTarget,
+        value: i128,
+        coef: i128,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GraphEdge {
+    pub a: usize,
+    pub b: usize,
+    pub kind: EdgeKind,
+}
+
+/// The solver's relations on one axis, with every variable's solved value.
+pub(crate) struct AxisGraph {
+    pub owners: Vec<Owner>,
+    pub values: Vec<i128>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// The relations Layer A solves on `axis`, leaving out conflicting and
+/// demoted constraints and non-driving ones.
+pub(crate) fn axis_graph(doc: &Document, axis: Axis) -> Result<AxisGraph, SolveError> {
+    use crate::command::DimensionTarget;
+    let solution = LayerA::default().solve(doc)?;
+    let engine = Engine::new(doc, Length::from_nanometers(0))?;
+    let conflicted: BTreeSet<Uuid> = solution.conflicts.iter().map(|c| c.constraint).collect();
+    let n = engine.nodes.len() + engine.openings.len() + engine.items.len() + 1;
+    let mut owners = vec![Owner::Ground; n];
+    let mut values = vec![0i128; n];
+    let pick = |p: &Point| {
+        i128::from(match axis {
+            Axis::X => p.x.nanometers(),
+            Axis::Y => p.y.nanometers(),
+        })
+    };
+    for (id, &v) in &engine.nodes {
+        owners[v] = Owner::Node(*id);
+        values[v] = solution.nodes.get(id).map_or(0, pick);
+    }
+    for (id, &v) in &engine.openings {
+        owners[v] = Owner::Opening(*id);
+        values[v] = solution
+            .openings
+            .get(id)
+            .map_or(0, |l| i128::from(l.nanometers()));
+    }
+    for (id, &v) in &engine.items {
+        owners[v] = Owner::Occurrence(*id);
+        values[v] = solution.occurrences.get(id).map_or(0, pick);
+    }
+    let mut edges = Vec::new();
+    for w in doc.walls.values() {
+        if wall_frame(w.direction).0 == axis {
+            edges.push(GraphEdge {
+                a: engine.node(w.node_a)?,
+                b: engine.node(w.node_b)?,
+                kind: EdgeKind::Rigid,
+            });
+        }
+    }
+    for (id, o) in &doc.occurrences {
+        if o.fixed {
+            let (v, _) = engine.item_center(*id, axis)?;
+            edges.push(GraphEdge {
+                a: 0,
+                b: v,
+                kind: EdgeKind::Anchor(*id),
+            });
+        }
+    }
+    for (id, o) in &doc.openings {
+        let (var, along, dir, _) = engine.opening(*id)?;
+        if along != axis || conflicted.contains(id) {
+            continue;
+        }
+        let (rv, _) = engine.resolve(&o.reference, along, *id)?;
+        edges.push(GraphEdge {
+            a: rv,
+            b: var,
+            kind: EdgeKind::Editable {
+                target: DimensionTarget::OpeningOffset { opening: *id },
+                value: i128::from(o.offset.value.nanometers()),
+                coef: dir,
+            },
+        });
+    }
+    for (id, o) in &doc.occurrences {
+        let crate::document::Placement::WallMounted {
+            wall,
+            reference,
+            offset,
+            ..
+        } = &o.placement
+        else {
+            continue;
+        };
+        let w = doc
+            .walls
+            .get(wall)
+            .ok_or(SolveError::UnknownEntity { id: *wall })?;
+        let (along, dir) = along_frame(w.direction);
+        if along != axis || conflicted.contains(id) {
+            continue;
+        }
+        let var = engine
+            .items
+            .get(id)
+            .copied()
+            .ok_or(SolveError::UnknownEntity { id: *id })?;
+        let (rv, _) = engine.resolve(reference, along, *id)?;
+        edges.push(GraphEdge {
+            a: rv,
+            b: var,
+            kind: EdgeKind::Editable {
+                target: DimensionTarget::OccurrenceOffset { occurrence: *id },
+                value: i128::from(offset.value.nanometers()),
+                coef: dir,
+            },
+        });
+    }
+    for (id, c) in &doc.constraints {
+        if c.status != ConstraintStatus::Driving {
+            continue;
+        }
+        let report = solution.constraints.get(id);
+        if !matches!(
+            report.map(|r| r.outcome),
+            Some(Outcome::Driving | Outcome::Redundant)
+        ) {
+            continue;
+        }
+        let copied = report.is_some_and(|r| r.copied_from.is_some());
+        match &c.kind {
+            ConstraintKind::Distance {
+                a,
+                b,
+                axis: ax,
+                value,
+                ..
+            } if *ax == axis => {
+                let (va, _) = engine.resolve(a, axis, *id)?;
+                let (vb, _) = engine.resolve(b, axis, *id)?;
+                let kind = if copied {
+                    EdgeKind::Rigid
+                } else {
+                    EdgeKind::Editable {
+                        target: DimensionTarget::Constraint { constraint: *id },
+                        value: i128::from(value.nanometers()),
+                        coef: 1,
+                    }
+                };
+                edges.push(GraphEdge { a: va, b: vb, kind });
+            }
+            ConstraintKind::Align { a, b, axis: ax } if *ax == axis => {
+                let (va, _) = engine.resolve(a, axis, *id)?;
+                let (vb, _) = engine.resolve(b, axis, *id)?;
+                edges.push(GraphEdge {
+                    a: va,
+                    b: vb,
+                    kind: EdgeKind::Rigid,
+                });
+            }
+            ConstraintKind::Fixed {
+                reference,
+                axis: ax,
+                value,
+            } if *ax == axis => {
+                let (v, _) = engine.resolve(reference, axis, *id)?;
+                edges.push(GraphEdge {
+                    a: 0,
+                    b: v,
+                    kind: EdgeKind::Editable {
+                        target: DimensionTarget::Constraint { constraint: *id },
+                        value: i128::from(value.nanometers()),
+                        coef: 1,
+                    },
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(AxisGraph {
+        owners,
+        values,
+        edges,
+    })
+}
+
+/// The variable and constant that give `reference`'s coordinate on `axis`.
+pub(crate) fn resolve_reference(
+    doc: &Document,
+    reference: &Reference,
+    axis: Axis,
+) -> Result<(usize, i128), SolveError> {
+    Engine::new(doc, Length::from_nanometers(0))?.resolve(
+        reference,
+        axis,
+        Uuid::from_bytes([0; 16]),
+    )
+}
+
 /// What a union-find edge came from, for naming conflicts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Label {
