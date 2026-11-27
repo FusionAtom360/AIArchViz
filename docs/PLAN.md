@@ -267,7 +267,12 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: a writer producing scene.json (schema\_version, unit in nanometers, coordinate system, storeys, elements with ids, labels, transforms and footprints, material slots, variant slots, lights, Proposed items, camera bookmarks), assets/\*.glb and manifest.sha256, plus schemas/scene.schema.json.
 - Done when: the same document gives identical bytes on repeat; the schema validates the output; manifest hashes verify.
 
-**T-121 Fixtures.** Spec 5.4, 13.2. Depends on T-117 and gate G-2.
+**T-120b Entity-creating commands.** Spec 8.2, 6, 7.1. Depends on T-117. Added by Q-60.
+
+- Build: arguments, apply, CLI schemas and tests for CreateWall, AddConstraint and PlaceOccurrence; the creation commands 8.2 lacks (CreateDatum, CreateSpace, CreateSlab, CreateCeiling, CreateRoof, CreateElementType), recorded in docs/DECISIONS.md for owner approval.
+- Done when: a script of CLI commands alone builds a document with datums, walls, openings, constraints, a space, a slab, a shed roof and box occurrences, and it solves.
+
+**T-121 Fixtures.** Spec 5.4, 13.2. Depends on T-117, T-120b and gate G-2.
 
 - Build: fixtures/l-room (asymmetric, with labeled fiducials) and fixtures/shop, built from your dimensions by a script of CLI commands rather than a hand-edited document. The shop includes both new walls, the extension with its shed roof, and equipment as parametric boxes.
 - Done when: the shop solves with no Conflicts, its underconstrained items are listed, and every measurement you marked unsure is a Measured constraint with a tolerance.

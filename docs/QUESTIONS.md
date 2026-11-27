@@ -397,3 +397,39 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   (b) the same with UE coordinates (centimeters, Y flipped) written directly; (c) collision as one footprint per element only, ignoring openings.
 - Recommendation: (a). World nanometers keep the package exact and the plugin owns the one mapping in 5.4; per-piece wall prisms keep doorways walkable without the plugin re-deriving geometry (12.1).
 - Answer: (a) world nanometers, per-piece collision (owner, 2026-11-26).
+
+## Q-60: The CLI cannot build a fixture yet (T-121, status: answered)
+- Context: T-121 builds fixtures/l-room and fixtures/shop "by a script of CLI commands". CreateWall, AddConstraint and PlaceOccurrence are in the 8.2 set but still take no arguments and return NotYetImplemented, and no task in PLAN.md implements them. 8.2 has no command at all that creates a Datum, Space, Slab, Ceiling, Roof or ElementType. So neither fixture can be built through the CLI today.
+- Options: (a) add a task before T-121 (for example T-120b "Entity-creating commands", depending on T-117): arguments, apply, schemas and tests for CreateWall, AddConstraint and PlaceOccurrence, plus a DECISIONS.md entry adding the creation commands 8.2 lacks (CreateDatum, CreateSpace, CreateSlab, CreateCeiling, CreateRoof, CreateElementType); T-121 then only writes the scripts and the fixture tests; (b) do all of (a) inside T-121; (c) build the fixtures with a Rust builder instead of CLI commands (contradicts T-121's Build line).
+- Recommendation: (a). The commands are a public contract that needs its own tests and schemas, and keeping them apart keeps each session to one task.
+- Answer: (a) a new task T-120b before T-121, added to PLAN.md (owner, 2026-11-26).
+
+## Q-61: The shop's outline does not fit its openings (T-121, status: answered)
+- Context: G-2 gives an 18 ft (N-S) x 36 ft (E-W) exterior. The west wall would then be 216 in long, yet its openings sit 42, 138, 323 and 377 in from the north wall's front edge (the last ends at 413 in), the first new wall meets the east wall 312 in from the north, and the extension leaves 36 in at each end of the east wall. Everything fits if the building is 36 ft N-S x 18 ft E-W: north and south walls 216 in (garage door 144 in centered), west and east walls 432 in.
+- Options: (a) 36 ft N-S x 18 ft E-W; (b) 18 ft N-S x 36 ft E-W, with the west-wall openings and new walls on other walls (owner to say which).
+- Recommendation: (a). It is the only reading in which every other measurement fits.
+- Answer: (a) 36 ft N-S x 18 ft E-W (owner, 2026-11-26).
+
+## Q-62: Where each G-2 measurement is taken (T-121, status: open)
+- Context: offsets along a wall and the new walls' positions need named references (6.2).
+- Options: (a) "from the front edge of the north wall" is from the north wall's exterior face to the opening's nearer (north) rough-opening edge; centered openings are centered between the host's exterior ends; window sills are 35 in and heads 80 in above the floor (height 45 in); new wall 1's north face is 312 in from the north exterior face and it runs between the east and west walls' interior faces (T joins); new wall 2's east face is 144 in from the east exterior face and it runs from the south wall's interior face to new wall 1's south face; no doors in the new walls; all walls 4 in thick, exterior walls function existing, the two new walls function new; (b) other references (owner to state).
+- Recommendation: (a). It is the plain reading of the G-2 wording.
+- Answer:
+
+## Q-63: The extension (T-121, status: answered, host to confirm)
+- Context: G-2 gives the extension's outline (on the east wall from 36 in off the north exterior face to 36 in off the south exterior face, 64 in out) and a shed roof with its high edge at 108 in on the east wall and its low edge at 96 in at the outer side (rise 12 in over a 64 in run, 10.6 degrees). It does not say whether the extension has walls, and the east wall has no opening into it.
+- Options: (a) enclosed: three new 4 in walls (north, east, south) whose exterior faces lie on the outline, no openings, and the shed roof over the outline with its ledger on the east wall's exterior face, high edge 108 in, low edge 96 in, overhang, thickness and fascia Proposed; (b) open lean-to: the roof only, on the same footprint; (c) as (a) with a door or opening the owner specifies.
+- Recommendation: (a), unless the extension is open.
+- Answer: (c) enclosed, with a door 48 in wide and 96 in tall whose near edge is 103 in from the north wall's front edge (owner, 2026-11-26). Host not stated: the door is taken to be in the shop's east wall, opening into the extension, since a 96 in door cannot fit under the 96 in low edge on the extension's outer wall. Owner to confirm.
+
+## Q-64: Equipment sizes and positions (T-121, status: partly answered)
+- Context: G-2 sizes the table (48 x 82 x 36 in), tool chest (20 x 42 x 56 in) and four storage racks (24 x 80 x 76 in) as X x Y x Z, but not the band saw, belt sander, bench grinder, CO2 laser, drill press or file cabinet, and gives no positions. Each occurrence needs a size and a stored position; the agent may not compute coordinates (P2), and the defaults catalog has no equipment sizes.
+- Options: (a) the owner gives a footprint and height for the six and a position for every item (for example "against the east wall, 24 in from the north wall"); (b) sizes for the six from the owner, positions left free so the items are listed as underconstrained, each starting at a position the owner states roughly; (c) leave the six unsized items out until models are chosen.
+- Recommendation: (a). The shop is the vertical slice, and an unplaced item is either a guess or a clash.
+- Answer: sizes are not important now; Claude proposes realistic sizes, all with source Proposed (owner, 2026-11-26). Proposed, X x Y x Z in inches: band saw 30 x 26 x 68, belt sander 30 x 20 x 48, bench grinder on pedestal 20 x 14 x 44, CO2 laser 56 x 36 x 42, drill press 24 x 16 x 66, file cabinet 15 x 28 x 52. Positions are still open: the owner states a rough position per item, or the items stay underconstrained from positions the owner states.
+
+## Q-65: Unsure measurements and wall height (T-121, status: open)
+- Context: the Done when needs every measurement the owner marked unsure to be a Measured constraint with a tolerance. G-2 marks none. G-2 also gives no wall height; the catalog proposes 120 in floor to floor (above the 109 in garage door and the 108 in ledger).
+- Options: (a) every G-2 value is UserStated, so no Measured constraints; wall height stays Proposed and is listed by required-parameters; (b) the owner names the unsure values with tolerances and states the wall height.
+- Recommendation: (b) if any value was taken off the paper plan by scale rather than measured; otherwise (a).
+- Answer:
