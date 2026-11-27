@@ -44,7 +44,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 ## High
 
 ### H-1: Unchecked i64 subtraction in the wall-length check: panics in debug, wraps in release
-- **Status: open**, planned as T-192.
+- **Status: closed** by T-192 (2026-11-27). The wall-length check uses checked subtraction and returns `GeometryError::Overflow`; covered by `node_offsets_at_the_i64_limits_are_an_overflow_error`.
 - **Where:** `crates/core/src/validity.rs:108-124`. The pattern `b.x.nanometers() - a.x.nanometers()` and its siblings are raw i64 arithmetic.
 - **Rule:** CLAUDE.md says core has "no panics on bad input". T-101 says overflow "never wraps".
 - **Repro:** I replayed the first 18 lines of the shop script with node 1 at x = -9223372036854775807 and node 2 at x = 9223372036854775807, then created the `pos_x` wall W-001 between them.

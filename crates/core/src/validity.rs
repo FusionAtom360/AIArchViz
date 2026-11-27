@@ -103,27 +103,17 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
                 .ok_or(GeometryError::UnknownEntity { id: n })
         };
         let (a, b) = (node(w.node_a)?, node(w.node_b)?);
+        let offset = |from: Length, to: Length| {
+            to.nanometers()
+                .checked_sub(from.nanometers())
+                .ok_or(GeometryError::Overflow)
+        };
+        let (dx, dy) = (offset(a.x, b.x)?, offset(a.y, b.y)?);
         let (along, across, dir) = match w.direction {
-            Direction::PosX => (
-                b.x.nanometers() - a.x.nanometers(),
-                b.y.nanometers() - a.y.nanometers(),
-                1,
-            ),
-            Direction::NegX => (
-                b.x.nanometers() - a.x.nanometers(),
-                b.y.nanometers() - a.y.nanometers(),
-                -1,
-            ),
-            Direction::PosY => (
-                b.y.nanometers() - a.y.nanometers(),
-                b.x.nanometers() - a.x.nanometers(),
-                1,
-            ),
-            Direction::NegY => (
-                b.y.nanometers() - a.y.nanometers(),
-                b.x.nanometers() - a.x.nanometers(),
-                -1,
-            ),
+            Direction::PosX => (dx, dy, 1),
+            Direction::NegX => (dx, dy, -1),
+            Direction::PosY => (dy, dx, 1),
+            Direction::NegY => (dy, dx, -1),
         };
         let detail = if across != 0 {
             Some(Detail::NotOnOneLine {
@@ -720,6 +710,47 @@ mod tests {
                 offset: len(3 * IN)
             })
         );
+    }
+
+    #[test]
+    fn node_offsets_at_the_i64_limits_are_an_overflow_error() {
+        let at = |doc: &mut Document, n: u8, x: i64, y: i64| {
+            node(doc, n, 0, 0);
+            if let Some(nd) = doc.nodes.get_mut(&node_id(n)) {
+                nd.x = len(x);
+                nd.y = len(y);
+            }
+        };
+        let (lo, hi) = (i64::MIN + 1, i64::MAX);
+        // Along: REVIEW-1 H-1 repro, a +X wall from x = -(2^63 - 1) to 2^63 - 1.
+        let mut doc = base();
+        at(&mut doc, 1, lo, 0);
+        at(&mut doc, 2, hi, 0);
+        wall(&mut doc, 1, 1, 2, Direction::PosX);
+        assert_eq!(
+            validate(&doc, MIN_JAMB_DISTANCE),
+            Err(GeometryError::Overflow)
+        );
+        // Backwards along a -X wall.
+        let mut doc = base();
+        at(&mut doc, 1, hi, 0);
+        at(&mut doc, 2, i64::MIN, 0);
+        wall(&mut doc, 1, 1, 2, Direction::NegX);
+        assert_eq!(
+            validate(&doc, MIN_JAMB_DISTANCE),
+            Err(GeometryError::Overflow)
+        );
+        // Across, on +Y and -Y walls.
+        for direction in [Direction::PosY, Direction::NegY] {
+            let mut doc = base();
+            at(&mut doc, 1, lo, 0);
+            at(&mut doc, 2, hi, IN);
+            wall(&mut doc, 1, 1, 2, direction);
+            assert_eq!(
+                validate(&doc, MIN_JAMB_DISTANCE),
+                Err(GeometryError::Overflow)
+            );
+        }
     }
 
     /// Invariant 2: walls do not overlap unless they share a node.
