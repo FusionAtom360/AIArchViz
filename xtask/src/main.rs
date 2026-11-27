@@ -2,13 +2,15 @@
 
 mod fixtures;
 mod float_lint;
+mod slice;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <check | golden>
+const USAGE: &str = "usage: cargo xtask <check | golden | slice>
   check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
-  golden  regenerate schemas/ (document and cli), fixtures/*/commands.txt and the insta snapshots";
+  golden  regenerate schemas/ (document and cli), fixtures/*/commands.txt and the insta snapshots
+  slice   replay fixtures/shop and fixtures/l-room and write their DXF, GLB and Scene Package to target/slice";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -22,6 +24,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("check") => check(),
         Some("golden") => golden(),
+        Some("slice") => slice_step(),
         _ => Err(USAGE.to_string()),
     };
     match result {
@@ -127,6 +130,16 @@ fn golden() -> Result<(), String> {
         },
     )?;
     println!("xtask golden: done; review `git diff` before committing");
+    Ok(())
+}
+
+/// Regenerates the vertical-slice outputs (T-122, docs/SLICE.md).
+fn slice_step() -> Result<(), String> {
+    let root = workspace_root();
+    let out = root.join("target").join("slice");
+    let report = slice::slice(&root, &out)?;
+    print!("{report}");
+    println!("xtask slice: outputs in {}", out.display());
     Ok(())
 }
 

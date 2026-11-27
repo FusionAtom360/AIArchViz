@@ -17,3 +17,6 @@ workspace = true
 archviz-core = { path = "../crates/core" }
 archviz-cli = { path = "../crates/cli" }
 archviz-export = { path = "../crates/export" }
+
+[dev-dependencies]
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }

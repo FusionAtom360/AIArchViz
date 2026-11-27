@@ -108,6 +108,7 @@ dependencies = [
  "archviz-cli",
  "archviz-core",
  "archviz-export",
+ "serde_json",
 ]
 
 [[package]]

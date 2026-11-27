@@ -24,3 +24,4 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | serde, schemars | as above | as above | archviz-export | scene.json types and schemas/scene.schema.json (T-120, Q-59). |
 | jsonschema | 0.63.2 (default-features off) | MIT | archviz-export (dev) | Validates scene.json against the generated schema. Test-only. |
 | archviz-export | (workspace) | GPL-3.0-or-later | archviz-xtask | `cargo xtask golden` writes schemas/scene.schema.json. |
+| serde_json | 1.0.154 (`std`) | MIT OR Apache-2.0 | archviz-xtask (dev) | Reads CLI responses in the `cargo xtask slice` tests (T-122). Test-only; already in the lock file. |

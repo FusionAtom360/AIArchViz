@@ -39,3 +39,12 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Decision: add CreateDatum, CreateMaterial, CreateSpace, CreateSlab, CreateCeiling, CreateRoof and CreateElementType to the v1 command set, with the arguments of Q-66. 8.2 lists no command that creates these entities, so without them a model cannot be built through the command API, as T-121 requires.
 - Rationale: every change goes through commands (8.1, P2); these fill a gap in 8.2 without changing any existing command.
 - Status: approved (owner, Q-66, 2026-11-26)
+
+## DEC-4: S-1 result, Layer A on the client's shop
+- Date: 2026-11-26
+- Task or spike: T-122 (S-1)
+- Spec section: 7.1 to 7.5, 14
+- Decision: S-1 passes; Layer A stays the solver for v1 and pivot trigger (1) does not fire.
+- Evidence: the shop of gate G-2 (fixtures/shop, 15 walls, 9 constraints, 7 openings, 4 spaces and slabs, a ledger shed roof, 12 equipment boxes) was entered through the CLI and solved by `cargo xtask slice` with 0 conflicts, 0 violations and 102 Proposed values listed. The degrees-of-freedom report lists exactly 24 underconstrained classes, the 12 occurrences on X and on Y, each naming its member, because no dimension ties equipment to a wall (crates/cli/tests/fixtures.rs). A contradicting 1 in datum-to-wall distance produces one Conflict naming the new constraint and the existing one, residual exactly -1 in, and the commit is refused as BLOCKED (s1_shop_conflict_names_both_constraints). Entering the walls and constraints reversed, or rotated, gives a byte-identical solution (s1_shop_solution_is_order_independent), adding to T-106's shuffled-order property test.
+- Limits: the shop is axis-aligned with only Distance constraints and shared nodes; Equal, Align and Measured tolerances are covered by T-106 and T-120b tests, not by this plan.
+- Status: draft
