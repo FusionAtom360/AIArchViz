@@ -17,8 +17,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::document::{
-    Axis, ConstraintKind, Document, JoinType, Node, Opening, OpeningEdge, OpeningKind, Placement,
-    Reference, Source, Sourced, Storey,
+    Axis, ConstraintKind, Document, JoinType, Layer, LayerSet, Node, Opening, OpeningEdge,
+    OpeningKind, Placement, Reference, Source, Sourced, Storey,
 };
 use crate::identity::Uuid;
 use crate::length::Length;
@@ -163,6 +163,16 @@ pub struct SetConstraintValue {
     pub value: Length,
 }
 
+/// Gives a wall exactly these layers and left extent (Q-43). A layer set
+/// shared with other walls is copied, so they are untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetWallLayers {
+    pub wall: Uuid,
+    pub layers: Vec<Layer>,
+    pub left_extent: Sourced<Length>,
+}
+
 /// Sets the unit of bare numbers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,7 +193,7 @@ pub enum Action {
     CreateWall(NoArgs),
     SplitWall(NoArgs),
     MergeWalls(NoArgs),
-    SetWallLayers(NoArgs),
+    SetWallLayers(SetWallLayers),
     MoveWall(MoveWall),
     CreateOpening(CreateOpening),
     MoveOpening(MoveOpening),
@@ -436,6 +446,42 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
         }
         Action::SetProjectUnits(args) => doc.project.default_unit = args.default_unit,
         Action::SetConstraintValue(args) => set_dimension(&mut doc, args)?,
+        Action::SetWallLayers(args) => {
+            let wall = doc
+                .walls
+                .get(&args.wall)
+                .cloned()
+                .ok_or(CommandError::UnknownEntity(args.wall))?;
+            let shared = doc
+                .walls
+                .iter()
+                .any(|(id, w)| *id != args.wall && w.layer_set == wall.layer_set);
+            let set = if shared {
+                // Copy, so the other walls keep their layers (Q-43).
+                let id = new_id(0);
+                if doc.layer_sets.contains_key(&id) {
+                    return Err(CommandError::IdCollision(id));
+                }
+                doc.layer_sets.insert(
+                    id,
+                    LayerSet {
+                        name: format!("{} layers", wall.label),
+                        layers: args.layers.clone(),
+                    },
+                );
+                id
+            } else {
+                doc.layer_sets
+                    .get_mut(&wall.layer_set)
+                    .ok_or(CommandError::UnknownEntity(wall.layer_set))?
+                    .layers = args.layers.clone();
+                wall.layer_set
+            };
+            if let Some(w) = doc.walls.get_mut(&args.wall) {
+                w.layer_set = set;
+                w.left_extent = args.left_extent.clone();
+            }
+        }
         Action::MoveWall(_) | Action::MoveOpening(_) | Action::MoveOccurrence(_) => {
             return Err(CommandError::Unresolved(command.action.kind()));
         }
@@ -793,7 +839,6 @@ pub(crate) mod tests {
             Action::CreateWall(n()),
             Action::SplitWall(n()),
             Action::MergeWalls(n()),
-            Action::SetWallLayers(n()),
             Action::PlaceOccurrence(n()),
             Action::RotateOccurrence(n()),
             Action::DeleteEntity(n()),
@@ -807,7 +852,7 @@ pub(crate) mod tests {
     #[test]
     fn the_rest_of_the_v1_set_is_not_yet_implemented() {
         let actions = unimplemented_actions();
-        assert_eq!(actions.len() + 9, 20, "8.2 lists 20 commands");
+        assert_eq!(actions.len() + 10, 20, "8.2 lists 20 commands");
         for action in actions {
             let kind = action.kind();
             assert_eq!(

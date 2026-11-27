@@ -10,6 +10,7 @@ mod identity;
 mod items;
 mod length;
 mod log;
+mod params;
 mod proposal;
 mod solver;
 mod space;
@@ -22,7 +23,11 @@ pub use command::{
     MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
     SetVariantSelection, apply,
 };
-pub use defaults::{CATALOG_VERSION, MIN_JAMB_DISTANCE, OpeningSize, opening_size};
+pub use defaults::{
+    CATALOG_VERSION, CEILING_HEIGHT, CEILING_THICKNESS, CLEARANCE, EAVE_OVERHANG, EYE_HEIGHT,
+    FASCIA_DEPTH, FLOOR_TO_FLOOR, MIN_JAMB_DISTANCE, OpeningSize, ROOF_THICKNESS, SLAB_THICKNESS,
+    WALL_BASE_OFFSET, interior_wall, opening_size, proposed,
+};
 pub use document::*;
 pub use edit::{Candidate, Case, MoveError, MoveOutcome};
 pub use geometry::{
@@ -33,6 +38,10 @@ pub use identity::{Label, LabelAllocator, LabelError, PROJECT_NAMESPACE, Uuid};
 pub use items::{Rect, clearance_zone, footprint, height_range, proxy_box};
 pub use length::{Length, LengthError};
 pub use log::{Event, History, LogEntry, LogError, Snapshot, log_from_jsonl, log_to_jsonl};
+pub use params::{
+    DEPENDENCY_ORDER, Reason, RequiredParameter, Unit, is_provisional, proposed_items,
+    required_parameters,
+};
 pub use proposal::{
     Ambiguity, AmbiguityKind, Change, CommitError, DeriveError, Derived, DiffEntry, Flag, Proposal,
     ProposeError, ProposedAction, commit, derive, propose,

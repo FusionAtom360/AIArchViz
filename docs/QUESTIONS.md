@@ -273,3 +273,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) both update: the picked one becomes 11 ft and the other is updated to 4 ft so it stays consistent, both shown as resulting dimensions; (b) the other is demoted to Reference with a 1 ft residual; (c) the other holds its value, so whatever it connects to moves (a Conflict if that is anchored).
 - Recommendation: (a).
 - Answer: (a) both update (owner, 2026-11-26).
+
+## Q-41: What required_parameters() lists, and in what order (T-114, status: answered)
+- Context: 7.4 lists {entity, field, reason, proposed default if any, unit}, "ordered by dependency". Under Q-4 every parameter holds a value with a source, so nothing is ever absent: a value the user did not give is a catalog default with source Proposed. T-114's Done when speaks of "a plan with no wall thickness"; T-115 will add a roof's missing pitch or low edge.
+- Options: (a) required_parameters() lists every value with source Proposed (reason: proposed default, with that value as the proposal) plus any parameter a task declares required that has no value and no default (reason: missing, no proposal; none exist until T-115); "no wall thickness" means the wall's layer thicknesses are catalog defaults; the model is provisional while the list is not empty, and the Proposal carries that flag; the Proposed items attached to exports are the same list; order by dependency is a fixed order of kinds, each depending only on earlier ones: storeys, layer sets, walls, openings, spaces, slabs, ceilings, roofs, element types, occurrences, materials, underlays, camera bookmarks; within a kind by label (or id), then by field path; units are length, lumens, kelvin, pitch or none; (b) list only truly missing values and keep Proposed values in a separate list.
+- Recommendation: (a). It is the only reading in which "a plan with no wall thickness" can exist under Q-4, and one list serves 7.4, 11.3 and 12.4.
+- Answer: (a) one list of Proposed values, ordered by kind (owner, 2026-11-26).
+
+## Q-42: Defaults catalog v2 values (T-114, status: answered)
+- Context: 6.4: "every optional geometric parameter has a versioned default"; the examples are "illustrative, to be confirmed". Catalog v1 (Q-21) has openings and the jamb distance. These numbers are the owner's.
+- Options: (a) catalog v2 adds: interior stud wall = 1/2" gypsum, 3 1/2" stud (core), 1/2" gypsum, reference line on the stud center (left extent 2 1/4"); wall base offset 0"; storey floor-to-floor 10'-0" and default ceiling height 9'-0"; slab thickness 4"; ceiling thickness 1/2"; camera eye height 5'-4"; clearance extents 0"; roof thickness 8", fascia depth 6", eave overhang 12" on every side; (b) other values you give.
+- Recommendation: (a): common US light-commercial values; each is Proposed, so the user confirms it.
+- Answer: (a) the listed v2 values (owner, 2026-11-26).
+
+## Q-43: How the user supplies a wall thickness (T-114, status: answered)
+- Context: the Done when needs "supplying the value clears its Proposed flag". SetWallLayers is in 8.2 but not implemented; layer sets can be shared by several walls.
+- Options: (a) implement SetWallLayers {wall, layers, left_extent}: the wall gets exactly those layers and left extent with the sources given; if its layer set is shared with other walls, the wall gets a new layer set (the command's derived id) so the others are untouched, otherwise its set is edited in place; then the document is solved like any commit; (b) add layer thickness as a SetConstraintValue target instead.
+- Recommendation: (a). It is the 8.2 command made for this, and never changing other walls by surprise matches P4.
+- Answer: (a) SetWallLayers, copying a shared layer set (owner, 2026-11-26).

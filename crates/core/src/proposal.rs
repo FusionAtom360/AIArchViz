@@ -173,6 +173,8 @@ pub struct Proposal {
     pub resolved: ProposedAction,
     /// Entities that move as a consequence of a move command (8.7).
     pub consequences: Vec<Uuid>,
+    /// The resulting model rests on Proposed values (7.4, Q-41).
+    pub provisional: bool,
     pub diff: Vec<DiffEntry>,
     pub constraint_status: BTreeMap<Uuid, ConstraintReport>,
     pub conflicts: Vec<Conflict>,
@@ -389,6 +391,7 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
         action: action.clone(),
         resolved,
         consequences: consequences.into_iter().collect(),
+        provisional: crate::params::is_provisional(&after),
         diff,
         constraint_status: solution.constraints,
         conflicts,
