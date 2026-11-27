@@ -317,6 +317,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: when `proposed_items` is non-empty, `write_dxf` adds a PROPOSED layer holding a left-aligned text block below the drawing's extents: a heading line "PROVISIONAL MODEL: n PROPOSED ITEMS" then one line per item in `proposed_items` order, "<label or entity id> <field> = <proposed default in feet-inches>"; `write_glb` puts the same list, serialized as in scene.json, in the root `extras.proposed_items`. A document with no Proposed items exports exactly as before, and the per-element GLBs of the Scene Package are unchanged (scene.json carries the list).
 - Done when: tests show that each exporter carries every item of `proposed_items` for a provisional document, in order; that supplying the values removes the list; and that the existing DXF and GLB golden files are unchanged.
 
+**T-196 No zero-length dimensions in the DXF.** Spec 11.1; T-118. Owner report 2026-11-27: the L-room and shop DXFs each show two 0'-0" dimensions. Depends on T-195.
+
+- Build: `write_dxf` draws no dimension for a driving Distance constraint whose value is zero, such as the anchors that pin a plan to its origin datum on x and y; such a constraint fixes a position and has no span to dimension. The constraint itself is unchanged, and the remaining dimensions stack in order as before without gaps.
+- Done when: a test on the derived L-room shows no 0'-0" text and no zero-length line on DIMENSIONS, with one dimension per non-zero driving Distance constraint; the DXF golden is unchanged.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.
