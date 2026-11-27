@@ -10,7 +10,9 @@
 //!    touching is allowed;
 //! 3. every opening lies inside its host's full-thickness stretch, the
 //!    minimum jamb distance from either end, and between base and top;
-//! 4. every Space and Slab outline is a simple rectilinear polygon.
+//! 4. every Space and Slab outline is a simple rectilinear polygon; every
+//!    roof is well defined, and every wall that follows a roof names one and
+//!    lies inside its footprint plus overhangs (DEC-6);
 //!
 //! 5. no occurrence overlaps a wall or another occurrence (plan area and
 //!    height range both shared) unless one is marked `overlap_allowed`; no
@@ -25,7 +27,7 @@ use std::collections::BTreeSet;
 
 use crate::document::{
     ConstraintKind, ConstraintStatus, Direction, Document, Placement, Point, ViolationKey,
-    ViolationKind, Wall,
+    ViolationKind, Wall, WallTop,
 };
 use crate::geometry::{
     GeometryError, OpeningProblem, opening_violations, wall_geometry, wall_profiles,
@@ -54,12 +56,24 @@ pub enum Detail {
     Blocked,
     /// Why a roof is not well defined.
     Roof(crate::roof::RoofProblem),
+    /// What is wrong with a wall that follows a roof (DEC-6).
+    WallTop(WallTopProblem),
     /// The footprints are `dx` and `dy` apart, closer than `required` (Q-32).
     TooClose {
         dx: Length,
         dy: Length,
         required: Length,
     },
+}
+
+/// What is wrong with a wall that follows a roof (DEC-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WallTopProblem {
+    /// The roof it names does not exist.
+    UnknownRoof,
+    /// Its footprint is not inside the roof's footprint plus overhangs.
+    OutsideRoof,
 }
 
 /// One failed invariant.
@@ -196,6 +210,30 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
             found.push((
                 key(ViolationKind::RoofDefinition, vec![*id]),
                 Detail::Roof(problem),
+            ));
+        }
+    }
+
+    // Walls that follow a roof (DEC-6).
+    for (id, w) in &sound.walls {
+        let WallTop::Roof { roof } = &w.top else {
+            continue;
+        };
+        if !sound.roofs.contains_key(roof) {
+            found.push((
+                key(ViolationKind::WallTop, vec![*id]),
+                Detail::WallTop(WallTopProblem::UnknownRoof),
+            ));
+            continue;
+        }
+        let (Ok(outline), Some(g)) = (crate::roof::roof_outline(&sound, *roof), geometry.get(id))
+        else {
+            continue;
+        };
+        if !inside(&g.footprint, &outline) {
+            found.push((
+                key(ViolationKind::WallTop, vec![*id]),
+                Detail::WallTop(WallTopProblem::OutsideRoof),
             ));
         }
     }
@@ -389,6 +427,52 @@ fn occurrence_checks(
         }
     }
     Ok(())
+}
+
+/// Whether convex polygon `a` lies inside simple polygon `b`, touching
+/// allowed: every vertex of `a` is inside or on `b`, and no vertex of `b`
+/// is strictly inside `a` (exact).
+fn inside(a: &[Point], b: &[Point]) -> bool {
+    let xy = |p: &Point| (i128::from(p.x.nanometers()), i128::from(p.y.nanometers()));
+    let (a, b): (Vec<_>, Vec<_>) = (a.iter().map(xy).collect(), b.iter().map(xy).collect());
+    let cross = |o: (i128, i128), p: (i128, i128), q: (i128, i128)| {
+        (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
+    };
+    let in_or_on = |p: (i128, i128)| {
+        let n = b.len();
+        let mut crossings = false;
+        for i in 0..n {
+            let (s, t) = (b[i], b[(i + 1) % n]);
+            let on_line = cross(s, t, p) == 0;
+            let within = p.0 >= s.0.min(t.0)
+                && p.0 <= s.0.max(t.0)
+                && p.1 >= s.1.min(t.1)
+                && p.1 <= s.1.max(t.1);
+            if on_line && within {
+                return true;
+            }
+            // Ray to +x: count edges straddling p's y, half-open.
+            if (s.1 > p.1) != (t.1 > p.1) {
+                let side = cross(s, t, p);
+                if (t.1 > s.1) == (side > 0) {
+                    crossings = !crossings;
+                }
+            }
+        }
+        crossings
+    };
+    let strictly_in_a = |p: (i128, i128)| {
+        let n = a.len();
+        let orient: i128 = (0..n)
+            .map(|i| {
+                let (s, t) = (a[i], a[(i + 1) % n]);
+                s.0 * t.1 - t.0 * s.1
+            })
+            .sum::<i128>()
+            .signum();
+        (0..n).all(|i| cross(a[i], a[(i + 1) % n], p) * orient > 0)
+    };
+    a.iter().all(|&p| in_or_on(p)) && !b.iter().any(|&p| strictly_in_a(p))
 }
 
 /// Whether two convex polygons share area (separating axis test, exact).
@@ -785,6 +869,87 @@ mod tests {
                 PolygonError::SelfIntersecting { .. }
             )))
         ));
+    }
+
+    /// DEC-6: a wall that follows a roof must lie inside the roof's footprint
+    /// plus overhangs, and name a roof that exists.
+    #[test]
+    fn roof_following_walls_must_lie_under_their_roof() {
+        let roof = uid(15, 0);
+        let mut doc = room();
+        let pts = |v: &[(i64, i64)]| {
+            v.iter()
+                .map(|&(x, y)| Point {
+                    x: len(x * IN),
+                    y: len(y * IN),
+                })
+                .collect()
+        };
+        doc.roofs.insert(
+            roof,
+            Roof {
+                storey: STOREY,
+                // Over the room's exterior faces, -2 to 242 by -2 to 146 in.
+                footprint: Boundary::Explicit {
+                    points: pts(&[(-2, -2), (242, -2), (242, 146), (-2, 146)]),
+                },
+                slope_direction: Sourced {
+                    value: Direction::PosY,
+                    source: Source::UserStated,
+                },
+                high_edge_height: sourced(110 * IN),
+                low_edge_height: Some(sourced(100 * IN)),
+                pitch: None,
+                ledger: None,
+                overhang: Overhang {
+                    pos_x: sourced(0),
+                    neg_x: sourced(0),
+                    pos_y: sourced(0),
+                    neg_y: sourced(0),
+                },
+                thickness: sourced(6 * IN),
+                fascia_depth: sourced(6 * IN),
+                material_slots: Default::default(),
+            },
+        );
+        for w in doc.walls.values_mut() {
+            w.top = WallTop::Roof { roof };
+        }
+        assert_eq!(check(&doc), vec![]);
+        // Shrink the roof by 1 in on the east: the east wall sticks out.
+        if let Some(r) = doc.roofs.get_mut(&roof) {
+            r.footprint = Boundary::Explicit {
+                points: pts(&[(-2, -2), (241, -2), (241, 146), (-2, 146)]),
+            };
+        }
+        let v = check(&doc);
+        assert_eq!(
+            keys(&v),
+            vec![
+                (ViolationKind::WallTop, vec![wall_id(1)]),
+                (ViolationKind::WallTop, vec![wall_id(2)]),
+                (ViolationKind::WallTop, vec![wall_id(3)]),
+            ]
+        );
+        assert_eq!(
+            v.first().map(|v| v.detail.clone()),
+            Some(Detail::WallTop(WallTopProblem::OutsideRoof))
+        );
+        // A 1 in overhang on the east covers it again.
+        if let Some(r) = doc.roofs.get_mut(&roof) {
+            r.overhang.pos_x = sourced(IN);
+        }
+        assert_eq!(check(&doc), vec![]);
+        // A wall naming no roof.
+        if let Some(w) = doc.walls.get_mut(&wall_id(4)) {
+            w.top = WallTop::Roof { roof: uid(15, 9) };
+        }
+        let v = check(&doc);
+        assert_eq!(keys(&v), vec![(ViolationKind::WallTop, vec![wall_id(4)])]);
+        assert_eq!(
+            v.first().map(|v| v.detail.clone()),
+            Some(Detail::WallTop(WallTopProblem::UnknownRoof))
+        );
     }
 
     /// 7.7: the checks are the only guard against a move that carries a wall

@@ -56,17 +56,19 @@ pub use proposal::{
     Ambiguity, AmbiguityKind, Change, CommitError, DeriveError, Derived, DiffEntry, Flag, Proposal,
     ProposeError, ProposedAction, commit, derive, propose,
 };
-pub use roof::{RoofGeometry, RoofProblem, derive_roofs, roof_geometry};
+pub use roof::{RoofGeometry, RoofProblem, derive_roofs, roof_geometry, roof_outline};
 pub use solver::{
     Conflict, ConstraintReport, FreeClass, LayerA, Member, Outcome, Solution, SolveError, Solver,
     reference_coordinate,
 };
 pub use space::{
     PolygonError, SpaceError, boundary_outline, check_polygon, polygon_area, space_boundary,
-    update_spaces,
+    spaces_outline, update_spaces,
 };
 pub use units::{
     GRID_NM, InputContext, InputRounding, ParseError, ParsedLength, ProjectUnit, echo_length,
     format_length, parse_length,
 };
-pub use validity::{Detail, Violation, blocks_commit, prune_acknowledged, validate};
+pub use validity::{
+    Detail, Violation, WallTopProblem, blocks_commit, prune_acknowledged, validate,
+};

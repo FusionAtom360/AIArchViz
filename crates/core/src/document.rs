@@ -383,6 +383,9 @@ pub enum WallTop {
     Storey,
     /// An explicit height above the wall's base.
     Height { height: Sourced<Length> },
+    /// The underside of this roof: sloped along the slope, level at the
+    /// underside on the higher face across it (DEC-6). Derived.
+    Roof { roof: Uuid },
 }
 
 /// A wall (IfcWall).
@@ -451,12 +454,22 @@ pub struct Opening {
     pub sill: Sourced<Length>,
 }
 
-/// A rectilinear boundary given explicitly or taken from a space.
+/// A rectilinear boundary given explicitly or taken from spaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Boundary {
-    Explicit { points: Vec<Point> },
-    FromSpace { space: Uuid },
+    Explicit {
+        points: Vec<Point>,
+    },
+    /// The space's outline: its walls' inner faces.
+    FromSpace {
+        space: Uuid,
+    },
+    /// The union of the spaces and the walls bounding them, out to each
+    /// bounding wall's far face (DEC-5).
+    FromSpaces {
+        spaces: Vec<Uuid>,
+    },
 }
 
 /// A floor slab (IfcSlab).
@@ -756,10 +769,11 @@ pub struct Roof {
     pub footprint: Boundary,
     /// The direction the roof slopes down; derived when a ledger is named.
     pub slope_direction: Sourced<Direction>,
-    /// Above the storey elevation, at the footprint's high edge (Q-44).
+    /// The underside above the storey elevation at the high edge (Q-44,
+    /// Q-68); derived from the low edge and the pitch when not given.
     pub high_edge_height: Sourced<Length>,
-    /// Above the storey elevation, at the footprint's low side; derived from
-    /// the pitch when there is one (Q-44).
+    /// The underside above the storey elevation at the footprint's low side;
+    /// derived from the pitch when the high edge is given (Q-44, Q-68).
     pub low_edge_height: Option<Sourced<Length>>,
     pub pitch: Option<Sourced<Pitch>>,
     /// A face of an existing wall where the high edge ends.
@@ -840,6 +854,9 @@ pub enum ViolationKind {
     MinClearance,
     /// An occurrence overlaps a wall or another occurrence (Q-27, Q-32).
     OccurrenceOverlap,
+    /// A wall that follows a roof names no roof, or lies outside the roof's
+    /// footprint plus overhangs (DEC-6).
+    WallTop,
 }
 
 /// Identifies a violation across solves: its kind and the sorted ids of the

@@ -2,36 +2,39 @@
 //!
 //! World coordinates are right-handed with Z up in nanometers; glTF is
 //! right-handed with Y up in meters, so glTF = (x, z, -y) / 1e9. The mapping
-//! is a rotation, so triangle winding and normals carry over unchanged.
+//! is a rotation, so triangle winding carries over unchanged.
 //!
 //! One node per element, in this order, each group by id:
 //! - Point datums, the fiducials: empty nodes named after the datum, at the
 //!   datum's x, y and the lowest storey elevation (0 with no storeys);
-//! - walls: the footprint extruded from base to top, split along the wall
-//!   around each opening's void (below the sill and above the head stay
-//!   solid), end cuts kept;
+//! - walls: one closed solid from the footprint, base to the profile's top
+//!   edge (sloped or level under a roof it follows, DEC-6), less each
+//!   opening's void (below the sill and above the head stay solid), end
+//!   cuts kept;
 //! - doors and windows: a 1 3/4 in panel or a 1/4 in pane filling the void,
 //!   centered in the wall's thickness; plain openings have no node;
 //! - slabs: the outline extruded down from the storey elevation plus the slab
 //!   elevation by its thickness; ceilings: extruded up from theirs;
-//! - roofs: the footprint grown by the overhangs, an inclined top through the
-//!   high and low edge heights and a bottom one vertical thickness below
-//!   (fascia is not modeled yet);
+//! - roofs: the footprint grown by the overhangs (none on a ledger edge), an
+//!   inclined underside through the high and low edge heights and a top one
+//!   vertical thickness above (Q-68; fascia is not modeled yet);
 //! - occurrences: boxes from declared dimensions at their footprint and
 //!   height range; an element type's model asset id is kept in extras.
 //!
 //! Each mesh is in element-local coordinates: the node translation is the
 //! element's lowest corner (minimum world x, y and z), so vertex values stay
-//! small and precise in 32-bit floats. Faces are flat-shaded with their own
-//! vertices and normals; there are no materials yet. Geometry is built in
-//! integer nanometers; floats appear only in the final conversion.
+//! small and precise in 32-bit floats. Each mesh is welded: one indexed
+//! vertex per distinct position and no NORMAL attribute, so readers compute
+//! flat normals as glTF 2.0 requires and see each element as one closed
+//! solid (Q-70); there are no materials yet. Geometry is built in integer
+//! nanometers; floats appear only in the final conversion.
 
 use std::fmt;
 
 use archviz_core::{
-    Axis, DatumGeometry, Direction, Document, GeometryError, OpeningKind, Point, RoofProblem,
-    SpaceError, Uuid, boundary_outline, footprint, height_range, roof_geometry, wall_geometry,
-    wall_profiles,
+    Axis, DatumGeometry, Direction, Document, GeometryError, Length, OpeningKind, Point,
+    RoofProblem, SpaceError, Uuid, boundary_outline, footprint, height_range, roof_geometry,
+    roof_outline, wall_geometry, wall_profiles,
 };
 use serde_json::{Map, Value, json};
 
@@ -331,6 +334,166 @@ fn fiducials(doc: &Document) -> Vec<Element> {
         .collect()
 }
 
+/// A wall's surface as one closed solid (Q-70): the footprint, cut at
+/// every along coordinate where its outline turns or a void starts or ends
+/// into columns, and each column into cells at the wall's base, every void's
+/// sill and head below the lowest top, and the top edge (`top`, sorted by
+/// along coordinate). A cell is empty when a void covers it. Faces are the
+/// cell sides between solid and empty or outside, so faces meet only along
+/// whole edges and the welded mesh is watertight. Heights in the top cell
+/// follow the top edge, which is linear across each column.
+fn wall_faces(
+    plan: &[P2],
+    along_x: bool,
+    base: i128,
+    top: &[(i128, i128)],
+    voids: &[(i128, i128, i128, i128)],
+) -> Vec<Vec<P3>> {
+    let get = |p: P2| if along_x { p.0 } else { p.1 };
+    let other = |p: P2| if along_x { p.1 } else { p.0 };
+    let at = |u: i128, v: i128, z: i128| if along_x { [u, v, z] } else { [v, u, z] };
+    let top_at = |u: i128| {
+        if let Some(e) = top.iter().find(|e| e.0 == u) {
+            return e.1;
+        }
+        let after = top.iter().position(|e| e.0 > u);
+        match after {
+            Some(0) | None => top
+                .iter()
+                .min_by_key(|e| (e.0 - u).abs())
+                .map_or(base, |e| e.1),
+            Some(i) => {
+                let (a, b) = (top[i - 1], top[i]);
+                a.1 + div_round((b.1 - a.1) * (u - a.0), b.0 - a.0)
+            }
+        }
+    };
+    let mut cuts: Vec<i128> = plan.iter().map(|&p| get(p)).collect();
+    let (Some(&lo), Some(&hi)) = (cuts.iter().min(), cuts.iter().max()) else {
+        return Vec::new();
+    };
+    for v in voids {
+        cuts.extend([v.0, v.1].into_iter().filter(|u| (lo..=hi).contains(u)));
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let lowest_top = cuts.iter().map(|&u| top_at(u)).min().unwrap_or(base);
+    if lowest_top <= base {
+        return Vec::new();
+    }
+    let mut levels = vec![base];
+    for v in voids {
+        levels.extend(
+            [v.2, v.3]
+                .into_iter()
+                .filter(|z| *z > base && *z < lowest_top),
+        );
+    }
+    levels.sort_unstable();
+    levels.dedup();
+    let last = levels.len() - 1;
+    let columns: Vec<Option<Vec<P2>>> = cuts
+        .windows(2)
+        .map(|w| clean(&clip(plan, along_x, Some(w[0]), Some(w[1]))))
+        .collect();
+    // Cell k of column c spans levels[k] up to levels[k + 1], or to the top.
+    let z_hi = |k: usize, u: i128| if k == last { top_at(u) } else { levels[k + 1] };
+    let solid = |c: usize, k: usize| {
+        if columns.get(c).is_none_or(Option::is_none) {
+            return false;
+        }
+        let (u0, u1) = (cuts[c], cuts[c + 1]);
+        let ceiling = z_hi(k, u0).max(z_hi(k, u1));
+        !voids
+            .iter()
+            .any(|v| v.0 <= u0 && u1 <= v.1 && v.2 <= levels[k] && ceiling <= v.3)
+    };
+    let mut faces = Vec::new();
+    for (c, poly) in columns.iter().enumerate() {
+        let Some(poly) = poly else {
+            continue;
+        };
+        let (u0, u1) = (cuts[c], cuts[c + 1]);
+        let flat = |z: i128, up: bool| -> Vec<P3> {
+            let mut f: Vec<P3> = poly.iter().map(|&p| at(get(p), other(p), z)).collect();
+            if !up {
+                f.reverse();
+            }
+            f
+        };
+        if solid(c, 0) {
+            faces.push(flat(base, false));
+        }
+        for k in 0..last {
+            if solid(c, k) != solid(c, k + 1) {
+                faces.push(flat(levels[k + 1], solid(c, k)));
+            }
+        }
+        if solid(c, last) {
+            faces.push(
+                poly.iter()
+                    .map(|&p| at(get(p), other(p), top_at(get(p))))
+                    .collect(),
+            );
+        }
+        let n = poly.len();
+        for i in 0..n {
+            let (p, q) = (poly[i], poly[(i + 1) % n]);
+            let on_cut = get(p) == get(q) && (get(p) == u0 || get(p) == u1);
+            if on_cut {
+                continue;
+            }
+            for (k, &lo_z) in levels.iter().enumerate() {
+                if solid(c, k) {
+                    let (hp, hq) = (z_hi(k, get(p)), z_hi(k, get(q)));
+                    faces.push(vec![
+                        at(get(p), other(p), lo_z),
+                        at(get(q), other(q), lo_z),
+                        at(get(q), other(q), hq),
+                        at(get(p), other(p), hp),
+                    ]);
+                }
+            }
+        }
+    }
+    // The faces across each cut, between a solid cell and an empty one.
+    for (j, &u) in cuts.iter().enumerate() {
+        let left = j.checked_sub(1);
+        let right = (j + 1 < cuts.len()).then_some(j);
+        let section: Vec<i128> = [left, right]
+            .into_iter()
+            .flatten()
+            .filter_map(|c| columns[c].as_ref())
+            .flatten()
+            .filter(|&&p| get(p) == u)
+            .map(|&p| other(p))
+            .collect();
+        let (Some(&va), Some(&vb)) = (section.iter().min(), section.iter().max()) else {
+            continue;
+        };
+        if va == vb {
+            continue;
+        }
+        for (k, &z0) in levels.iter().enumerate() {
+            let sl = left.is_some_and(|c| solid(c, k));
+            let sr = right.is_some_and(|c| solid(c, k));
+            if sl == sr {
+                continue;
+            }
+            let z1 = z_hi(k, u);
+            let mut f = vec![at(u, va, z0), at(u, vb, z0), at(u, vb, z1), at(u, va, z1)];
+            // Face +u when the solid side is the lower one.
+            let n = newell(&f);
+            let along = if along_x { n[0] } else { n[1] };
+            if (along > 0) != sl {
+                f.reverse();
+            }
+            faces.push(f);
+        }
+    }
+    faces
+}
+
 fn walls_and_openings(doc: &Document) -> Result<(Vec<Element>, Vec<Element>), GltfError> {
     let geometry = wall_geometry(doc).map_err(GltfError::Geometry)?;
     let profiles = wall_profiles(doc).map_err(GltfError::Geometry)?;
@@ -348,33 +511,46 @@ fn walls_and_openings(doc: &Document) -> Result<(Vec<Element>, Vec<Element>), Gl
         let (Some(&lo), Some(&hi)) = (across.iter().min(), across.iter().max()) else {
             continue;
         };
-        let (base, top) = (
-            i128::from(p.base.nanometers()),
-            i128::from(p.top.nanometers()),
-        );
-        let mut voids: Vec<_> = p
+        let n = |l: archviz_core::Length| i128::from(l.nanometers());
+        let base = n(p.base);
+        let mut top: Vec<(i128, i128)> = p.top_edge.iter().map(|e| (n(e.0), n(e.1))).collect();
+        top.sort_unstable();
+        let mut voids: Vec<(i128, i128, i128, i128, Uuid)> = p
             .voids
             .iter()
             .map(|v| {
-                let (s, e) = (
-                    i128::from(v.start.nanometers()),
-                    i128::from(v.end.nanometers()),
-                );
-                (s.min(e), s.max(e), v)
+                let (s, e) = (n(v.start), n(v.end));
+                (s.min(e), s.max(e), n(v.sill), n(v.head), v.opening)
             })
             .collect();
-        voids.sort_by_key(|v| (v.0, v.1, v.2.opening));
+        voids.sort_unstable();
         let mut e = Element::new(*id, "wall", w.label.to_string());
+        let spans: Vec<_> = voids.iter().map(|v| (v.0, v.1, v.2, v.3)).collect();
+        e.faces = wall_faces(&plan, along_x, base, &top, &spans);
+        // Collision: flat-topped pieces between, below and above the voids,
+        // each up to the highest point of the top edge over it.
+        let highest = |a: Option<i128>, b: Option<i128>| {
+            top.iter()
+                .filter(|t| a.is_none_or(|a| t.0 >= a) && b.is_none_or(|b| t.0 <= b))
+                .map(|t| t.1)
+                .max()
+                .unwrap_or(n(p.top))
+        };
+        let piece = |e: &mut Element, a: Option<i128>, b: Option<i128>, z0: i128, z1: i128| {
+            if let (Some(outline), true) = (clean(&clip(&plan, along_x, a, b)), z1 > z0) {
+                e.prisms.push(Prism { outline, z0, z1 });
+            }
+        };
         let mut from = None;
-        for &(a, b, v) in &voids {
-            let sill = i128::from(v.sill.nanometers()).clamp(base, top);
-            let head = i128::from(v.head.nanometers()).clamp(base, top);
-            e.solid(&clip(&plan, along_x, from, Some(a)), base, top);
-            let span = clip(&plan, along_x, Some(a), Some(b));
-            e.solid(&span, base, sill);
-            e.solid(&span, head, top);
+        for &(a, b, sill, head, opening) in &voids {
+            let z_top = highest(Some(a), Some(b));
+            let sill = sill.clamp(base, z_top);
+            let head = head.clamp(base, z_top);
+            piece(&mut e, from, Some(a), base, highest(from, Some(a)));
+            piece(&mut e, Some(a), Some(b), base, sill);
+            piece(&mut e, Some(a), Some(b), head, z_top);
             from = Some(from.map_or(b, |f: i128| f.max(b)));
-            let Some(o) = doc.openings.get(&v.opening) else {
+            let Some(o) = doc.openings.get(&opening) else {
                 continue;
             };
             let (kind, t) = match o.kind {
@@ -389,12 +565,12 @@ fn walls_and_openings(doc: &Document) -> Result<(Vec<Element>, Vec<Element>), Gl
             } else {
                 rect(c0, a, c1, b)
             };
-            let mut d = Element::new(v.opening, kind, format!("{kind} {}", v.opening));
+            let mut d = Element::new(opening, kind, format!("{kind} {opening}"));
             d.extras.insert("host".into(), json!(id.to_string()));
             d.faces = extrude(&panel, sill, head);
             openings.push(d);
         }
-        e.solid(&clip(&plan, along_x, from, None), base, top);
+        piece(&mut e, from, None, base, highest(from, None));
         walls.push(e);
     }
     openings.sort_by_key(|o| o.id);
@@ -430,87 +606,37 @@ fn roofs(doc: &Document) -> Result<Vec<Element>, GltfError> {
     let mut out = Vec::new();
     for (id, r) in &doc.roofs {
         let g = roof_geometry(doc, *id).map_err(|e| GltfError::Roof(*id, e))?;
-        let low = g.low_height.ok_or(GltfError::RoofWithoutLowHeight(*id))?;
-        let outline = boundary_outline(doc, &r.footprint).map_err(GltfError::Space)?;
+        if g.low_height.is_none() {
+            return Err(GltfError::RoofWithoutLowHeight(*id));
+        }
+        let outline = roof_outline(doc, *id).map_err(|e| GltfError::Roof(*id, e))?;
         let Some(plan) = clean(&outline.iter().map(p2).collect::<Vec<_>>()) else {
             continue;
         };
-        // Each edge moves outward by its facing side's overhang; edges of a
-        // counterclockwise rectilinear polygon face right of their direction.
-        let o = |l: &archviz_core::Sourced<archviz_core::Length>| i128::from(l.value.nanometers());
-        let n = plan.len();
-        let offsets: Vec<(bool, i128)> = (0..n)
-            .map(|i| {
-                let (p, q) = (plan[i], plan[(i + 1) % n]);
-                if p.1 == q.1 {
-                    // Horizontal: +X faces -Y, -X faces +Y.
-                    if q.0 > p.0 {
-                        (true, p.1 - o(&r.overhang.neg_y))
-                    } else {
-                        (true, p.1 + o(&r.overhang.pos_y))
-                    }
-                } else if q.1 > p.1 {
-                    (false, p.0 + o(&r.overhang.pos_x))
-                } else {
-                    (false, p.0 - o(&r.overhang.neg_x))
-                }
-            })
-            .collect();
-        let grown: Vec<P2> = (0..n)
-            .map(|i| {
-                let (prev, next) = (offsets[(i + n - 1) % n], offsets[i]);
-                let (mut x, mut y) = plan[i];
-                for (horizontal, v) in [prev, next] {
-                    if horizontal {
-                        y = v;
-                    } else {
-                        x = v;
-                    }
-                }
-                (x, y)
-            })
-            .collect();
-        let Some(grown) = clean(&grown) else {
-            continue;
-        };
         let level = storey_elevation(doc, r.storey)?;
-        let (high_edge, low_edge) = (
-            i128::from(g.high_edge.nanometers()),
-            i128::from(g.low_edge.nanometers()),
-        );
-        let (hh, lh) = (
-            i128::from(g.high_height.nanometers()),
-            i128::from(low.nanometers()),
-        );
-        let axis = match g.slope_direction {
-            Direction::PosX | Direction::NegX => Axis::X,
-            Direction::PosY | Direction::NegY => Axis::Y,
-        };
-        let (mut num_scale, mut den) = (lh - hh, low_edge - high_edge);
-        if den < 0 {
-            num_scale = -num_scale;
-            den = -den;
-        }
-        if den == 0 {
-            return Err(GltfError::Roof(*id, RoofProblem::NoRun));
-        }
-        let top = move |p: P2| {
-            let s = match axis {
+        // The underside at each corner of the grown outline (DEC-6).
+        let mut under = std::collections::BTreeMap::new();
+        for &p in &plan {
+            let s = match g.axis() {
                 Axis::X => p.0,
                 Axis::Y => p.1,
             };
-            level + hh + div_round(num_scale * (s - high_edge), den)
-        };
+            let s = i64::try_from(s)
+                .map(Length::from_nanometers)
+                .map_err(|_| GltfError::Overflow)?;
+            let h = g.underside(s).map_err(|e| GltfError::Roof(*id, e))?;
+            under.insert(p, level + i128::from(h.nanometers()));
+        }
+        let bottom = |p: P2| under.get(&p).copied().unwrap_or(level);
         let t = i128::from(r.thickness.value.nanometers());
         let mut e = Element::new(*id, "roof", format!("roof {id}"));
-        e.faces = prism(&grown, |p| top(p) - t, top);
+        e.faces = prism(&plan, bottom, |p| bottom(p) + t);
         // The plane is linear, so its extremes lie at the outline's corners.
-        let heights: Vec<i128> = grown.iter().map(|&p| top(p)).collect();
-        if let (Some(lo), Some(hi)) = (heights.iter().min(), heights.iter().max()) {
+        if let (Some(lo), Some(hi)) = (under.values().min(), under.values().max()) {
             e.prisms.push(Prism {
-                outline: grown.clone(),
-                z0: lo - t,
-                z1: *hi,
+                outline: plan.clone(),
+                z0: *lo,
+                z1: hi + t,
             });
         }
         out.push(e);
@@ -601,11 +727,9 @@ fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
             node["translation"] = json!(to_gltf(origin)?);
         }
         if !e.faces.is_empty() {
-            let (mut positions, mut normals, mut indices) = (
-                Vec::<[f32; 3]>::new(),
-                Vec::<[f32; 3]>::new(),
-                Vec::<u32>::new(),
-            );
+            // One vertex per distinct position (Q-70), in order of first use.
+            let mut index: std::collections::BTreeMap<P3, u32> = std::collections::BTreeMap::new();
+            let (mut positions, mut indices) = (Vec::<[f32; 3]>::new(), Vec::<u32>::new());
             for face in &e.faces {
                 let n = newell(face);
                 let k = (0..3)
@@ -614,19 +738,24 @@ fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
                 let (u, v) = ((k + 1) % 3, (k + 2) % 3);
                 let flat: Vec<P2> = face.iter().map(|p| (p[u], p[v])).collect();
                 let tris = triangulate(&flat).ok_or(GltfError::Triangulation(e.id))?;
-                let g = [n[0] as f64, n[2] as f64, -(n[1] as f64)];
-                let len = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
-                let normal = g.map(|c| (c / len) as f32);
-                let first = u32::try_from(positions.len()).map_err(|_| GltfError::Overflow)?;
-                for p in face {
-                    let local = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
-                    positions.push(to_gltf(local)?.map(|c| c as f32));
-                    normals.push(normal);
-                }
                 for t in tris {
-                    for i in t {
-                        let i = u32::try_from(i).map_err(|_| GltfError::Overflow)?;
-                        indices.push(first + i);
+                    let mut tri = [0u32; 3];
+                    for (slot, i) in tri.iter_mut().zip(t) {
+                        let p = face[i];
+                        *slot = match index.get(&p) {
+                            Some(&i) => i,
+                            None => {
+                                let i = u32::try_from(positions.len())
+                                    .map_err(|_| GltfError::Overflow)?;
+                                let local = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                                positions.push(to_gltf(local)?.map(|c| c as f32));
+                                index.insert(p, i);
+                                i
+                            }
+                        };
+                    }
+                    if tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2] {
+                        indices.extend(tri);
                     }
                 }
             }
@@ -642,7 +771,6 @@ fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
                 v.iter().flatten().flat_map(|c| c.to_le_bytes()).collect()
             };
             let pv = view(&mut bin, &mut views, &bytes3(&positions), 34962);
-            let nv = view(&mut bin, &mut views, &bytes3(&normals), 34962);
             let index_bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
             let iv = view(&mut bin, &mut views, &index_bytes, 34963);
             let a = accessors.len();
@@ -651,15 +779,12 @@ fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
                 "min": min.map(f64::from), "max": max.map(f64::from),
             }));
             accessors.push(json!({
-                "bufferView": nv, "componentType": 5126, "count": normals.len(), "type": "VEC3",
-            }));
-            accessors.push(json!({
                 "bufferView": iv, "componentType": 5125, "count": indices.len(), "type": "SCALAR",
             }));
             node["mesh"] = json!(meshes.len());
             meshes.push(json!({
                 "name": e.name,
-                "primitives": [{ "attributes": { "POSITION": a, "NORMAL": a + 1 }, "indices": a + 2 }],
+                "primitives": [{ "attributes": { "POSITION": a }, "indices": a + 1 }],
             }));
         }
         nodes.push(node);

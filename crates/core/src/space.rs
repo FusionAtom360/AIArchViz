@@ -9,13 +9,20 @@
 //! miter or not, and every other join is rectilinear. A free-standing wall
 //! inside the region is an error in v1 (Q-25).
 //!
+//! A boundary from several spaces (DEC-5) is the union of their regions on
+//! the same grid, grown across every wall that bounds them: from each room
+//! cell straight through the cells of walls running across the step, to
+//! the first cell no such wall covers, so each bounding wall is included
+//! out to its far face; then each wall cell with grown wall cells beside it
+//! on both axes, which fills the corners.
+//!
 //! Every polygon is returned counterclockwise from its vertex with the lowest
 //! x, then the lowest y, with collinear vertices removed. Areas are exact
 //! square nanometers in i128.
 
 use std::fmt;
 
-use crate::document::{Boundary, Document, Point};
+use crate::document::{Boundary, Direction, Document, Point};
 use crate::geometry::{GeometryError, wall_geometry};
 use crate::identity::Uuid;
 use crate::length::Length;
@@ -80,6 +87,12 @@ pub enum SpaceError {
     NotSimple {
         space: Uuid,
     },
+    /// A boundary from spaces lists none (DEC-5).
+    NoSpaces,
+    /// A boundary from spaces lists spaces on different storeys (DEC-5).
+    StoreyMismatch {
+        space: Uuid,
+    },
 }
 
 impl fmt::Display for SpaceError {
@@ -101,6 +114,13 @@ impl fmt::Display for SpaceError {
             }
             SpaceError::NotSimple { space } => {
                 write!(f, "space {space} touches itself at a corner")
+            }
+            SpaceError::NoSpaces => f.write_str("the boundary lists no spaces"),
+            SpaceError::StoreyMismatch { space } => {
+                write!(
+                    f,
+                    "space {space} is on another storey than the first listed"
+                )
             }
         }
     }
@@ -245,193 +265,357 @@ pub fn check_polygon(points: &[Point]) -> Result<Vec<Point>, PolygonError> {
         .collect()
 }
 
+/// The storey's wall footprints as a grid: cut at every footprint's
+/// bounding-rectangle edge, with the walls covering each cell.
+struct Grid {
+    xs: Vec<i128>,
+    ys: Vec<i128>,
+    /// Per wall: id and whether it runs along X.
+    walls: Vec<(Uuid, bool)>,
+    /// Indices into `walls` covering each cell, row by row.
+    owners: Vec<Vec<usize>>,
+}
+
+impl Grid {
+    fn new(document: &Document, storey: Uuid) -> Result<Grid, GeometryError> {
+        let geometry = wall_geometry(document)?;
+        let mut rects: Vec<(Uuid, bool, Xy, Xy)> = Vec::new();
+        for (wall_id, g) in &geometry {
+            let Some(wall) = document.walls.get(wall_id).filter(|w| w.storey == storey) else {
+                continue;
+            };
+            let pts: Vec<Xy> = g.footprint.iter().map(xy).collect();
+            let (Some(x0), Some(x1)) =
+                (pts.iter().map(|p| p.0).min(), pts.iter().map(|p| p.0).max())
+            else {
+                continue;
+            };
+            let (Some(y0), Some(y1)) =
+                (pts.iter().map(|p| p.1).min(), pts.iter().map(|p| p.1).max())
+            else {
+                continue;
+            };
+            let along_x = matches!(wall.direction, Direction::PosX | Direction::NegX);
+            rects.push((*wall_id, along_x, (x0, y0), (x1, y1)));
+        }
+        let mut xs: Vec<i128> = rects.iter().flat_map(|r| [r.2.0, r.3.0]).collect();
+        let mut ys: Vec<i128> = rects.iter().flat_map(|r| [r.2.1, r.3.1]).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        ys.sort_unstable();
+        ys.dedup();
+        let (nx, ny) = (xs.len().saturating_sub(1), ys.len().saturating_sub(1));
+        let index = |axis: &[i128], v: i128| axis.binary_search(&v).unwrap_or(0);
+        let mut owners: Vec<Vec<usize>> = vec![Vec::new(); nx * ny];
+        for (k, r) in rects.iter().enumerate() {
+            for j in index(&ys, r.2.1)..index(&ys, r.3.1) {
+                for i in index(&xs, r.2.0)..index(&xs, r.3.0) {
+                    owners[j * nx + i].push(k);
+                }
+            }
+        }
+        Ok(Grid {
+            walls: rects.iter().map(|r| (r.0, r.1)).collect(),
+            xs,
+            ys,
+            owners,
+        })
+    }
+
+    fn nx(&self) -> usize {
+        self.xs.len().saturating_sub(1)
+    }
+
+    fn ny(&self) -> usize {
+        self.ys.len().saturating_sub(1)
+    }
+
+    fn cell(&self, i: usize, j: usize) -> usize {
+        j * self.nx() + i
+    }
+
+    fn covered(&self, i: usize, j: usize) -> bool {
+        !self.owners[self.cell(i, j)].is_empty()
+    }
+
+    fn on_edge(&self, i: usize, j: usize) -> bool {
+        i == 0 || j == 0 || i + 1 == self.nx() || j + 1 == self.ny()
+    }
+
+    fn neighbours(&self, i: usize, j: usize) -> Vec<(usize, usize)> {
+        let mut out = Vec::with_capacity(4);
+        if i > 0 {
+            out.push((i - 1, j));
+        }
+        if i + 1 < self.nx() {
+            out.push((i + 1, j));
+        }
+        if j > 0 {
+            out.push((i, j - 1));
+        }
+        if j + 1 < self.ny() {
+            out.push((i, j + 1));
+        }
+        out
+    }
+
+    /// The cells of space `id`: the region around its seed that the walls
+    /// enclose, with no free-standing wall inside (Q-24, Q-25).
+    fn room(&self, id: Uuid, seed: &Point) -> Result<Vec<bool>, SpaceError> {
+        let open = SpaceError::Open { space: id };
+        let (nx, ny) = (self.nx(), self.ny());
+        if nx == 0 || ny == 0 {
+            return Err(open);
+        }
+        // The seed's cell, half-open on its upper edges.
+        let (sx, sy) = xy(seed);
+        let find = |axis: &[i128], v: i128| {
+            let k = axis.partition_point(|&a| a <= v);
+            (k >= 1 && k < axis.len()).then(|| k - 1)
+        };
+        let (Some(si), Some(sj)) = (find(&self.xs, sx), find(&self.ys, sy)) else {
+            return Err(open);
+        };
+        if self.covered(si, sj) {
+            return Err(SpaceError::SeedInWall { space: id });
+        }
+        // Flood fill the room.
+        let mut filled = vec![false; nx * ny];
+        let mut stack = vec![(si, sj)];
+        filled[self.cell(si, sj)] = true;
+        while let Some((i, j)) = stack.pop() {
+            if self.on_edge(i, j) {
+                return Err(open);
+            }
+            for (a, b) in self.neighbours(i, j) {
+                if !self.covered(a, b) && !filled[self.cell(a, b)] {
+                    filled[self.cell(a, b)] = true;
+                    stack.push((a, b));
+                }
+            }
+        }
+        // Islands: wall regions surrounded by the room on every side (Q-25).
+        let mut seen = vec![false; nx * ny];
+        let mut island_walls = std::collections::BTreeSet::new();
+        for j in 0..ny {
+            for i in 0..nx {
+                if !self.covered(i, j) || seen[self.cell(i, j)] {
+                    continue;
+                }
+                let mut component = vec![(i, j)];
+                let mut enclosed = true;
+                seen[self.cell(i, j)] = true;
+                let mut k = 0;
+                while k < component.len() {
+                    let (a, b) = component[k];
+                    k += 1;
+                    if self.on_edge(a, b) {
+                        enclosed = false;
+                    }
+                    for (c, d) in self.neighbours(a, b) {
+                        if self.covered(c, d) {
+                            if !seen[self.cell(c, d)] {
+                                seen[self.cell(c, d)] = true;
+                                component.push((c, d));
+                            }
+                        } else if !filled[self.cell(c, d)] {
+                            enclosed = false;
+                        }
+                    }
+                }
+                if enclosed {
+                    for (a, b) in component {
+                        island_walls.extend(
+                            self.owners[self.cell(a, b)]
+                                .iter()
+                                .map(|&w| self.walls[w].0),
+                        );
+                    }
+                }
+            }
+        }
+        if !island_walls.is_empty() {
+            return Err(SpaceError::Island {
+                space: id,
+                walls: island_walls.into_iter().collect(),
+            });
+        }
+        Ok(filled)
+    }
+
+    /// Adds the walls bounding the room cells `cells`, out to their far
+    /// faces (DEC-5): from each room cell straight across the cells of walls
+    /// that run perpendicular to the step, then the corner cells that have
+    /// such grown cells beside them on both axes.
+    fn grow(&self, cells: &mut [bool]) {
+        let (nx, ny) = (self.nx(), self.ny());
+        let room = cells.to_vec();
+        // A wall running along X is crossed by a step along Y, and the reverse.
+        let crossed = |i: usize, j: usize, step_x: bool| {
+            self.owners[self.cell(i, j)]
+                .iter()
+                .any(|&w| self.walls[w].1 != step_x)
+        };
+        let step = |i: usize, j: usize, d: usize| -> Option<(usize, usize)> {
+            match d {
+                0 => (i + 1 < nx).then_some((i + 1, j)),
+                1 => i.checked_sub(1).map(|i| (i, j)),
+                2 => (j + 1 < ny).then_some((i, j + 1)),
+                _ => j.checked_sub(1).map(|j| (i, j)),
+            }
+        };
+        for j in 0..ny {
+            for i in 0..nx {
+                if !room[self.cell(i, j)] {
+                    continue;
+                }
+                for d in 0..4 {
+                    let mut at = step(i, j, d);
+                    while let Some((a, b)) = at {
+                        if !self.covered(a, b) || !crossed(a, b, d < 2) {
+                            break;
+                        }
+                        cells[self.cell(a, b)] = true;
+                        at = step(a, b, d);
+                    }
+                }
+            }
+        }
+        // Corners, until none is added (a T junction's corner spans two cells).
+        loop {
+            let grown = cells.to_vec();
+            let is_grown = |at: Option<(usize, usize)>| {
+                at.is_some_and(|(a, b)| grown[self.cell(a, b)] && !room[self.cell(a, b)])
+            };
+            let mut added = false;
+            for j in 0..ny {
+                for i in 0..nx {
+                    if grown[self.cell(i, j)] || !self.covered(i, j) {
+                        continue;
+                    }
+                    let x_side = is_grown(step(i, j, 0)) || is_grown(step(i, j, 1));
+                    let y_side = is_grown(step(i, j, 2)) || is_grown(step(i, j, 3));
+                    if x_side && y_side {
+                        cells[self.cell(i, j)] = true;
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+    }
+
+    /// Traces `cells` as one counterclockwise polygon; `id` names the
+    /// space in errors.
+    fn trace(&self, cells: &[bool], id: Uuid) -> Result<Vec<Point>, SpaceError> {
+        let (nx, ny) = (self.nx(), self.ny());
+        let (xs, ys) = (&self.xs, &self.ys);
+        // Every cell side between the region and the rest, directed with
+        // the region on its left.
+        let mut next: std::collections::BTreeMap<Xy, Vec<Xy>> = std::collections::BTreeMap::new();
+        let inside = |i: Option<usize>, j: Option<usize>| match (i, j) {
+            (Some(i), Some(j)) if i < nx && j < ny => cells[self.cell(i, j)],
+            _ => false,
+        };
+        for j in 0..ny {
+            for i in 0..nx {
+                if !cells[self.cell(i, j)] {
+                    continue;
+                }
+                let (x0, x1, y0, y1) = (xs[i], xs[i + 1], ys[j], ys[j + 1]);
+                let sides = [
+                    (inside(Some(i), j.checked_sub(1)), (x0, y0), (x1, y0)),
+                    (inside(Some(i + 1), Some(j)), (x1, y0), (x1, y1)),
+                    (inside(Some(i), Some(j + 1)), (x1, y1), (x0, y1)),
+                    (inside(i.checked_sub(1), Some(j)), (x0, y1), (x0, y0)),
+                ];
+                for (neighbour_inside, a, b) in sides {
+                    if !neighbour_inside {
+                        next.entry(a).or_default().push(b);
+                    }
+                }
+            }
+        }
+        if next.values().any(|v| v.len() != 1) {
+            return Err(SpaceError::NotSimple { space: id });
+        }
+        let Some(&start) = next.keys().next() else {
+            return Err(SpaceError::Open { space: id });
+        };
+        let mut outline = vec![start];
+        let mut at = start;
+        loop {
+            let Some(&to) = next.get(&at).and_then(|v| v.first()) else {
+                return Err(SpaceError::NotSimple { space: id });
+            };
+            if to == start {
+                break;
+            }
+            outline.push(to);
+            at = to;
+            if outline.len() > next.len() {
+                return Err(SpaceError::NotSimple { space: id });
+            }
+        }
+        if outline.len() != next.len() {
+            return Err(SpaceError::NotSimple { space: id });
+        }
+        canonical(outline)
+            .into_iter()
+            .map(|p| point(p).map_err(SpaceError::Geometry))
+            .collect()
+    }
+}
+
 /// The derived boundary of space `id` (Q-24).
 pub fn space_boundary(document: &Document, id: Uuid) -> Result<Vec<Point>, SpaceError> {
     let space = document
         .spaces
         .get(&id)
         .ok_or(SpaceError::UnknownEntity { id })?;
-    let open = SpaceError::Open { space: id };
-    // Each bounding wall's footprint rectangle.
-    let geometry = wall_geometry(document)?;
-    let mut rects: Vec<(Uuid, Xy, Xy)> = Vec::new();
-    for (wall_id, g) in &geometry {
-        let on_storey = document.walls.get(wall_id).map(|w| w.storey) == Some(space.storey);
-        let pts: Vec<Xy> = g.footprint.iter().map(xy).collect();
-        let (Some(x0), Some(x1)) = (pts.iter().map(|p| p.0).min(), pts.iter().map(|p| p.0).max())
-        else {
-            continue;
-        };
-        let (Some(y0), Some(y1)) = (pts.iter().map(|p| p.1).min(), pts.iter().map(|p| p.1).max())
-        else {
-            continue;
-        };
-        if on_storey {
-            rects.push((*wall_id, (x0, y0), (x1, y1)));
-        }
-    }
-    let mut xs: Vec<i128> = rects.iter().flat_map(|r| [r.1.0, r.2.0]).collect();
-    let mut ys: Vec<i128> = rects.iter().flat_map(|r| [r.1.1, r.2.1]).collect();
-    xs.sort_unstable();
-    xs.dedup();
-    ys.sort_unstable();
-    ys.dedup();
-    if xs.len() < 2 || ys.len() < 2 {
-        return Err(open);
-    }
-    let (nx, ny) = (xs.len() - 1, ys.len() - 1);
-    let index = |axis: &[i128], v: i128| axis.binary_search(&v).unwrap_or(0);
-    let cell = |i: usize, j: usize| j * nx + i;
-    // Which walls cover each cell.
-    let mut owners: Vec<Vec<usize>> = vec![Vec::new(); nx * ny];
-    for (k, r) in rects.iter().enumerate() {
-        for j in index(&ys, r.1.1)..index(&ys, r.2.1) {
-            for i in index(&xs, r.1.0)..index(&xs, r.2.0) {
-                owners[cell(i, j)].push(k);
-            }
-        }
-    }
-    let covered = |i: usize, j: usize| !owners[cell(i, j)].is_empty();
-    // The seed's cell, half-open on its upper edges.
-    let (sx, sy) = xy(&space.seed);
-    let find = |axis: &[i128], v: i128| {
-        let k = axis.partition_point(|&a| a <= v);
-        (k >= 1 && k < axis.len()).then(|| k - 1)
+    let grid = Grid::new(document, space.storey)?;
+    let cells = grid.room(id, &space.seed)?;
+    grid.trace(&cells, id)
+}
+
+/// The union of `spaces` and the walls bounding them, out to each bounding
+/// wall's far face (DEC-5). The spaces must share a storey; order and
+/// repeats do not matter.
+pub fn spaces_outline(document: &Document, spaces: &[Uuid]) -> Result<Vec<Point>, SpaceError> {
+    let mut ids: Vec<Uuid> = spaces.to_vec();
+    ids.sort();
+    ids.dedup();
+    let Some(&first) = ids.first() else {
+        return Err(SpaceError::NoSpaces);
     };
-    let (Some(si), Some(sj)) = (find(&xs, sx), find(&ys, sy)) else {
-        return Err(open);
-    };
-    if covered(si, sj) {
-        return Err(SpaceError::SeedInWall { space: id });
-    }
-    let neighbours = |i: usize, j: usize| {
-        let mut out = Vec::with_capacity(4);
-        if i > 0 {
-            out.push((i - 1, j));
-        }
-        if i + 1 < nx {
-            out.push((i + 1, j));
-        }
-        if j > 0 {
-            out.push((i, j - 1));
-        }
-        if j + 1 < ny {
-            out.push((i, j + 1));
-        }
-        out
-    };
-    let on_edge = |i: usize, j: usize| i == 0 || j == 0 || i + 1 == nx || j + 1 == ny;
-    // Flood fill the room.
-    let mut filled = vec![false; nx * ny];
-    let mut stack = vec![(si, sj)];
-    filled[cell(si, sj)] = true;
-    while let Some((i, j)) = stack.pop() {
-        if on_edge(i, j) {
-            return Err(open);
-        }
-        for (a, b) in neighbours(i, j) {
-            if !covered(a, b) && !filled[cell(a, b)] {
-                filled[cell(a, b)] = true;
-                stack.push((a, b));
-            }
+    for id in &ids {
+        if !document.spaces.contains_key(id) {
+            return Err(SpaceError::UnknownEntity { id: *id });
         }
     }
-    // Islands: wall regions surrounded by the room on every side (Q-25).
-    let mut seen = vec![false; nx * ny];
-    let mut island_walls = std::collections::BTreeSet::new();
-    for j in 0..ny {
-        for i in 0..nx {
-            if !covered(i, j) || seen[cell(i, j)] {
-                continue;
-            }
-            let mut component = vec![(i, j)];
-            let mut enclosed = true;
-            seen[cell(i, j)] = true;
-            let mut k = 0;
-            while k < component.len() {
-                let (a, b) = component[k];
-                k += 1;
-                if on_edge(a, b) {
-                    enclosed = false;
-                }
-                for (c, d) in neighbours(a, b) {
-                    if covered(c, d) {
-                        if !seen[cell(c, d)] {
-                            seen[cell(c, d)] = true;
-                            component.push((c, d));
-                        }
-                    } else if !filled[cell(c, d)] {
-                        enclosed = false;
-                    }
-                }
-            }
-            if enclosed {
-                for (a, b) in component {
-                    island_walls.extend(owners[cell(a, b)].iter().map(|&w| rects[w].0));
-                }
-            }
+    let storey = document
+        .spaces
+        .get(&first)
+        .map(|s| s.storey)
+        .ok_or(SpaceError::UnknownEntity { id: first })?;
+    let grid = Grid::new(document, storey)?;
+    let mut cells = vec![false; grid.nx() * grid.ny()];
+    for id in &ids {
+        let space = document
+            .spaces
+            .get(id)
+            .ok_or(SpaceError::UnknownEntity { id: *id })?;
+        if space.storey != storey {
+            return Err(SpaceError::StoreyMismatch { space: *id });
+        }
+        for (c, inside) in cells.iter_mut().zip(grid.room(*id, &space.seed)?) {
+            *c |= inside;
         }
     }
-    if !island_walls.is_empty() {
-        return Err(SpaceError::Island {
-            space: id,
-            walls: island_walls.into_iter().collect(),
-        });
-    }
-    // Trace the outline: every cell side between the room and the rest,
-    // directed with the room on its left.
-    let mut next: std::collections::BTreeMap<Xy, Vec<Xy>> = std::collections::BTreeMap::new();
-    let in_room = |i: Option<usize>, j: Option<usize>| match (i, j) {
-        (Some(i), Some(j)) if i < nx && j < ny => filled[cell(i, j)],
-        _ => false,
-    };
-    for j in 0..ny {
-        for i in 0..nx {
-            if !filled[cell(i, j)] {
-                continue;
-            }
-            let (x0, x1, y0, y1) = (xs[i], xs[i + 1], ys[j], ys[j + 1]);
-            let sides = [
-                (in_room(Some(i), j.checked_sub(1)), (x0, y0), (x1, y0)),
-                (in_room(Some(i + 1), Some(j)), (x1, y0), (x1, y1)),
-                (in_room(Some(i), Some(j + 1)), (x1, y1), (x0, y1)),
-                (in_room(i.checked_sub(1), Some(j)), (x0, y1), (x0, y0)),
-            ];
-            for (neighbour_in_room, a, b) in sides {
-                if !neighbour_in_room {
-                    next.entry(a).or_default().push(b);
-                }
-            }
-        }
-    }
-    if next.values().any(|v| v.len() != 1) {
-        return Err(SpaceError::NotSimple { space: id });
-    }
-    let Some(&start) = next.keys().next() else {
-        return Err(open);
-    };
-    let mut outline = vec![start];
-    let mut at = start;
-    loop {
-        let Some(&to) = next.get(&at).and_then(|v| v.first()) else {
-            return Err(SpaceError::NotSimple { space: id });
-        };
-        if to == start {
-            break;
-        }
-        outline.push(to);
-        at = to;
-        if outline.len() > next.len() {
-            return Err(SpaceError::NotSimple { space: id });
-        }
-    }
-    if outline.len() != next.len() {
-        return Err(SpaceError::NotSimple { space: id });
-    }
-    canonical(outline)
-        .into_iter()
-        .map(|p| point(p).map_err(SpaceError::Geometry))
-        .collect()
+    grid.grow(&mut cells);
+    grid.trace(&cells, first)
 }
 
 /// Stores every space's derived boundary (Q-7).
@@ -454,6 +638,7 @@ pub fn boundary_outline(
     match boundary {
         Boundary::Explicit { points } => Ok(check_polygon(points)?),
         Boundary::FromSpace { space } => space_boundary(document, *space),
+        Boundary::FromSpaces { spaces } => spaces_outline(document, spaces),
     }
 }
 
@@ -813,6 +998,111 @@ mod tests {
             Err(SpaceError::UnknownEntity { id: uid(11, 7) })
         );
         Ok(())
+    }
+
+    fn from_spaces(spaces: &[Uuid]) -> Boundary {
+        Boundary::FromSpaces {
+            spaces: spaces.to_vec(),
+        }
+    }
+
+    /// Two rooms side by side: a 200 x 80 in rectangle on centerlines split
+    /// by an interior wall at x = 100 that butts the outer walls (T joins).
+    fn two_rooms() -> Document {
+        let mut doc = room(
+            &[(0, 0), (100, 0), (200, 0), (200, 80), (100, 80), (0, 80)],
+            (50, 40),
+        );
+        if let Some(mut w) = doc.walls.get(&uid(2, 0)).cloned() {
+            w.node_a = uid(1, 1);
+            w.node_b = uid(1, 4);
+            w.direction = Direction::PosY;
+            w.join_priority = 1;
+            doc.walls.insert(uid(2, 6), w);
+        }
+        doc
+    }
+
+    /// DEC-5: a slab from one space reaches its walls' exterior faces.
+    #[test]
+    fn from_spaces_reaches_the_walls_far_faces() -> Result<(), SpaceError> {
+        let doc = room(&[(0, 0), (240, 0), (240, 144), (0, 144)], (120, 72));
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[SPACE]))?,
+            vec![p(-2, -2), p(242, -2), p(242, 146), p(-2, 146)]
+        );
+        // An L: the corners at the step are filled too.
+        let l = room(
+            &[(0, 0), (240, 0), (240, 96), (120, 96), (120, 192), (0, 192)],
+            (60, 150),
+        );
+        assert_eq!(
+            boundary_outline(&l, &from_spaces(&[SPACE]))?,
+            vec![
+                p(-2, -2),
+                p(242, -2),
+                p(242, 98),
+                p(122, 98),
+                p(122, 194),
+                p(-2, 194)
+            ]
+        );
+        Ok(())
+    }
+
+    /// DEC-5: listed spaces join across the walls between them; an unlisted
+    /// neighbour's shared wall is included out to its far face only.
+    #[test]
+    fn from_spaces_joins_rooms_across_interior_walls() -> Result<(), SpaceError> {
+        let mut doc = two_rooms();
+        let east = uid(11, 1);
+        let mut second = doc
+            .spaces
+            .get(&SPACE)
+            .cloned()
+            .ok_or(SpaceError::Open { space: SPACE })?;
+        second.seed = p(150, 40);
+        doc.spaces.insert(east, second);
+        assert_eq!(
+            space_boundary(&doc, SPACE)?,
+            vec![p(2, 2), p(98, 2), p(98, 78), p(2, 78)]
+        );
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[SPACE, east]))?,
+            vec![p(-2, -2), p(202, -2), p(202, 82), p(-2, 82)]
+        );
+        // The west room alone: out to the interior wall's east face at 102.
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[SPACE]))?,
+            vec![p(-2, -2), p(102, -2), p(102, 82), p(-2, 82)]
+        );
+        // Order and repeats do not matter.
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[east, SPACE, east]))?,
+            boundary_outline(&doc, &from_spaces(&[SPACE, east]))?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn from_spaces_errors() {
+        let doc = room(&[(0, 0), (240, 0), (240, 144), (0, 144)], (120, 72));
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[])),
+            Err(SpaceError::NoSpaces)
+        );
+        assert_eq!(
+            boundary_outline(&doc, &from_spaces(&[SPACE, uid(11, 7)])),
+            Err(SpaceError::UnknownEntity { id: uid(11, 7) })
+        );
+        let mut other = doc.clone();
+        if let Some(s) = other.spaces.get_mut(&SPACE) {
+            s.seed = p(500, 500);
+        }
+        assert_eq!(
+            boundary_outline(&other, &from_spaces(&[SPACE])),
+            Err(SpaceError::Open { space: SPACE })
+        );
     }
 
     proptest! {

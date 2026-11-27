@@ -3,9 +3,13 @@
 //! Each fixture is written to `fixtures/<name>/commands.txt` by
 //! `cargo xtask golden`: one line per `archviz` invocation, `<subcommand>
 //! <request JSON>`, starting with `new`. Every later line is an `apply` of
-//! one command. Ids are fixed: each command's idempotency key is derived
-//! from the project id and the command's number, and an entity's id from
-//! that key (8.1), so later commands can name earlier entities.
+//! one command, except where walls follow a roof (DEC-6): a wall can only
+//! name a roof that exists, so the roof and its walls (and, when the roof's
+//! footprint comes from the space they enclose, that space) are created in
+//! one `apply` of several commands, one transaction. Ids are fixed: each
+//! command's idempotency key is derived from the project id and the
+//! command's number, and an entity's id from that key (8.1), so later
+//! commands can name earlier entities, and a batch can name its own.
 //!
 //! Every length below is a G-2 value (or its plain sum, such as 216 + 64),
 //! a catalog default left null, or an equipment size or position that the
@@ -74,19 +78,43 @@ impl Script {
 
     /// Applies one command; returns the id of its first new entity.
     fn apply(&mut self, action: Action) -> Result<Uuid, String> {
-        self.count += 1;
-        let n = self.count.to_string();
-        let command = Command {
-            id: Uuid::derive(self.project, "fixture-command", &n),
-            idempotency_key: Uuid::derive(self.project, "fixture-key", &n),
-            action,
-        };
-        let text = to_canonical_json(&command).map_err(|e| e.to_string())?;
+        let ids = self.apply_all(vec![action])?;
+        ids.first().copied().ok_or_else(|| "no command".to_string())
+    }
+
+    /// The id of the first new entity of the command `ahead` commands from
+    /// now (0: the next one).
+    fn id_ahead(&self, ahead: u32) -> Uuid {
+        let n = (self.count + 1 + ahead).to_string();
+        Uuid::derive(
+            Uuid::derive(self.project, "fixture-key", &n),
+            "command",
+            "0",
+        )
+    }
+
+    /// Applies several commands as one transaction; returns the id of each
+    /// one's first new entity.
+    fn apply_all(&mut self, actions: Vec<Action>) -> Result<Vec<Uuid>, String> {
+        let mut texts = Vec::new();
+        let mut ids = Vec::new();
+        for action in actions {
+            self.count += 1;
+            let n = self.count.to_string();
+            let command = Command {
+                id: Uuid::derive(self.project, "fixture-command", &n),
+                idempotency_key: Uuid::derive(self.project, "fixture-key", &n),
+                action,
+            };
+            texts.push(to_canonical_json(&command).map_err(|e| e.to_string())?);
+            ids.push(Uuid::derive(command.idempotency_key, "command", "0"));
+        }
         self.lines.push(format!(
-            r#"apply {{"action":{{"commands":[{text}],"kind":"commands"}},"actor":"fixture","timestamp_ms":{}}}"#,
+            r#"apply {{"action":{{"commands":[{}],"kind":"commands"}},"actor":"fixture","timestamp_ms":{}}}"#,
+            texts.join(","),
             self.count
         ));
-        Ok(Uuid::derive(command.idempotency_key, "command", "0"))
+        Ok(ids)
     }
 
     fn text(&self) -> String {
@@ -160,15 +188,17 @@ impl Script {
         }))
     }
 
+    /// One slab over a contiguous floor: the spaces and their walls, out to
+    /// the walls' far faces (DEC-5).
     fn slab(
         &mut self,
         storey: Uuid,
-        space: Uuid,
+        spaces: Vec<Uuid>,
         thickness: Option<Sourced<Length>>,
     ) -> Result<Uuid, String> {
         self.apply(Action::CreateSlab(CreateSlab {
             storey,
-            boundary: Boundary::FromSpace { space },
+            boundary: Boundary::FromSpaces { spaces },
             thickness,
             elevation: None,
         }))
@@ -247,7 +277,18 @@ impl WallSpec {
         function: Function,
         join_priority: u32,
     ) -> Result<Uuid, String> {
-        s.apply(Action::CreateWall(CreateWall {
+        s.apply(self.action(a, b, direction, function, join_priority))
+    }
+
+    fn action(
+        &self,
+        a: Uuid,
+        b: Uuid,
+        direction: Direction,
+        function: Function,
+        join_priority: u32,
+    ) -> Action {
+        Action::CreateWall(CreateWall {
             storey: self.storey,
             node_a: a,
             node_b: b,
@@ -258,7 +299,7 @@ impl WallSpec {
             base_offset: Some(stated(0)),
             top: self.top.clone(),
             join_priority: Some(join_priority),
-        }))
+        })
     }
 }
 
@@ -314,8 +355,12 @@ fn opening(s: &mut Script, o: OpeningSpec) -> Result<Uuid, String> {
 /// The L-room (5.4, Q-54): the room of T-119's tests, rebuilt through the
 /// CLI and fully dimensioned from fiducial F-A. Wall centerlines (0,0)
 /// (240,0) (240,96) (96,96) (96,180) (0,180) in inches, so the arms
-/// differ; 6 in walls; a door, a window and a plain opening; slab, ceiling
-/// and a 2:12 shed roof; fiducials F-A to F-D; a marker box raised 36 in.
+/// differ; 6 in walls; a door, a window and a plain opening; a slab out to
+/// the walls' exterior faces (DEC-5), a ceiling and a 2:12 shed roof
+/// bearing on the walls (Q-68): its footprint is the walls' exterior
+/// outline, its underside 120 in at the low side with the high edge from
+/// the pitch, and every wall follows it (DEC-6); fiducials F-A to F-D; a
+/// marker box raised 36 in.
 pub fn l_room() -> Result<String, String> {
     let mut s = Script::new("L-room")?;
     let storey = s.storey(stated(108))?;
@@ -324,6 +369,14 @@ pub fn l_room() -> Result<String, String> {
     s.datum("F-C", 240, 96)?;
     s.datum("F-D", 0, 180)?;
     let core = s.material("6 in wall")?;
+    let corners = [(0, 0), (240, 0), (240, 96), (96, 96), (96, 180), (0, 180)];
+    let mut n = Vec::new();
+    for (x, y) in corners {
+        n.push(s.node(x, y)?);
+    }
+    // The room, its roof and the walls following the roof in one apply:
+    // the roof's footprint comes from the room, which the walls enclose.
+    let (space, roof) = (s.id_ahead(0), s.id_ahead(1));
     let spec = WallSpec {
         storey,
         layers: vec![Layer {
@@ -332,13 +385,8 @@ pub fn l_room() -> Result<String, String> {
             core: true,
         }],
         left_extent: stated(3),
-        top: None,
+        top: Some(WallTop::Roof { roof }),
     };
-    let corners = [(0, 0), (240, 0), (240, 96), (96, 96), (96, 180), (0, 180)];
-    let mut n = Vec::new();
-    for (x, y) in corners {
-        n.push(s.node(x, y)?);
-    }
     let directions = [
         Direction::PosX,
         Direction::PosY,
@@ -347,10 +395,45 @@ pub fn l_room() -> Result<String, String> {
         Direction::NegX,
         Direction::NegY,
     ];
-    let mut w = Vec::new();
+    let mut batch = vec![
+        Action::CreateSpace(CreateSpace {
+            storey,
+            name: "Room".into(),
+            seed: pt(48, 48),
+            finishes: None,
+        }),
+        Action::CreateRoof(CreateRoof {
+            storey,
+            footprint: Boundary::FromSpaces {
+                spaces: vec![space],
+            },
+            slope_direction: Some(Direction::NegY),
+            high_edge_height: None,
+            low_edge_height: Some(stated(120)),
+            pitch: Some(Sourced {
+                value: Pitch { rise: 2, run: 12 },
+                source: Source::UserStated,
+            }),
+            ledger: None,
+            overhang: Some(Overhang {
+                pos_x: stated(12),
+                neg_x: stated(12),
+                pos_y: stated(12),
+                neg_y: stated(12),
+            }),
+            thickness: Some(stated(6)),
+            fascia_depth: Some(stated(6)),
+            material_slots: BTreeMap::new(),
+        }),
+    ];
     for (i, d) in directions.into_iter().enumerate() {
-        w.push(spec.create(&mut s, n[i], n[(i + 1) % 6], d, Function::New, 0)?);
+        batch.push(spec.action(n[i], n[(i + 1) % 6], d, Function::New, 0));
     }
+    let ids = s.apply_all(batch)?;
+    if ids[..2] != [space, roof] {
+        return Err("the room and roof ids were mispredicted".into());
+    }
+    let w = ids[2..].to_vec();
     s.distance(datum_ref(fa), node_ref(n[0]), Axis::X, 0)?;
     s.distance(datum_ref(fa), node_ref(n[0]), Axis::Y, 0)?;
     s.distance(node_ref(n[0]), node_ref(n[1]), Axis::X, 240)?;
@@ -376,8 +459,7 @@ pub fn l_room() -> Result<String, String> {
             },
         )?;
     }
-    let space = s.space(storey, "Room", pt(48, 48))?;
-    s.slab(storey, space, Some(stated(4)))?;
+    s.slab(storey, vec![space], Some(stated(4)))?;
     s.apply(Action::CreateCeiling(CreateCeiling {
         storey,
         boundary: Boundary::FromSpace { space },
@@ -386,27 +468,6 @@ pub fn l_room() -> Result<String, String> {
             source: Source::UserStated,
         }),
         elevation: Some(stated(108)),
-    }))?;
-    s.apply(Action::CreateRoof(CreateRoof {
-        storey,
-        footprint: Boundary::FromSpace { space },
-        slope_direction: Some(Direction::NegY),
-        high_edge_height: stated(132),
-        low_edge_height: None,
-        pitch: Some(Sourced {
-            value: Pitch { rise: 2, run: 12 },
-            source: Source::UserStated,
-        }),
-        ledger: None,
-        overhang: Some(Overhang {
-            pos_x: stated(12),
-            neg_x: stated(12),
-            pos_y: stated(12),
-            neg_y: stated(12),
-        }),
-        thickness: Some(stated(6)),
-        fascia_depth: Some(stated(6)),
-        material_slots: BTreeMap::new(),
     }))?;
     let marker = s.box_type("Marker", (12, 6, 10), Authority::UserStatedExact)?;
     s.place(storey, marker, (200, 40), 0, Source::UserStated, 36)?;
@@ -421,6 +482,9 @@ pub fn l_room() -> Result<String, String> {
 /// exterior face; reference lines are the wall centerlines (left extent 2 in).
 /// The east, west and south walls are split where other walls meet them
 /// (T joins); exterior walls run through (priority 0), new walls butt.
+/// The extension's walls follow its shed roof (DEC-6), whose stated heights
+/// are its underside (Q-68). One slab covers the shop and the extension out
+/// to the exterior faces (DEC-5).
 pub fn shop() -> Result<String, String> {
     let mut s = Script::new("Shop")?;
     let storey = s.storey(proposed(108))?;
@@ -438,27 +502,22 @@ pub fn shop() -> Result<String, String> {
         top: None,
     };
     let (old, fresh) = (spec(existing), spec(new));
-    // The extension's walls: tops at the roof's low edge (Q-63).
-    let extension_walls = WallSpec {
-        top: Some(WallTop::Height {
-            height: proposed(96),
-        }),
-        ..spec(new)
-    };
 
-    // Starting guesses; the dimensions below place every node.
-    let a = s.node(0, 0)?; // south-west
-    let b = s.node(60, 0)?; // new wall 2 meets the south wall
-    let c = s.node(200, 0)?; // south-east
-    let d = s.node(200, 30)?; // extension south wall meets the east wall
-    let e = s.node(200, 100)?; // new wall 1 meets the east wall
-    let f = s.node(200, 400)?; // extension north wall meets the east wall
-    let g = s.node(200, 420)?; // north-east
-    let h = s.node(0, 420)?; // north-west
-    let i = s.node(0, 100)?; // new wall 1 meets the west wall
-    let j = s.node(60, 100)?; // new wall 2 meets new wall 1
-    let k = s.node(260, 30)?; // extension south-east
-    let l = s.node(260, 400)?; // extension north-east
+    // Starting guesses at the centerline positions the dimensions below
+    // give, so that every intermediate state is valid; the dimensions place
+    // every node.
+    let a = s.node(2, 2)?; // south-west
+    let b = s.node(70, 2)?; // new wall 2 meets the south wall
+    let c = s.node(214, 2)?; // south-east
+    let d = s.node(214, 38)?; // extension south wall meets the east wall
+    let e = s.node(214, 118)?; // new wall 1 meets the east wall
+    let f = s.node(214, 394)?; // extension north wall meets the east wall
+    let g = s.node(214, 430)?; // north-east
+    let h = s.node(2, 430)?; // north-west
+    let i = s.node(2, 118)?; // new wall 1 meets the west wall
+    let j = s.node(70, 118)?; // new wall 2 meets new wall 1
+    let k = s.node(278, 38)?; // extension south-east
+    let l = s.node(278, 394)?; // extension north-east
 
     let ex = Function::Existing;
     let south_1 = old.create(&mut s, a, b, Direction::PosX, ex, 0)?;
@@ -476,11 +535,40 @@ pub fn shop() -> Result<String, String> {
     fresh.create(&mut s, j, e, Direction::PosX, nw, 1)?;
     // New wall 2, south to north; its right face is its east face.
     let new_2 = fresh.create(&mut s, b, j, Direction::PosY, nw, 2)?;
-    // The extension, counterclockwise.
-    let ext = &extension_walls;
-    let ext_s = ext.create(&mut s, d, k, Direction::PosX, nw, 1)?;
-    let ext_e = ext.create(&mut s, k, l, Direction::PosY, nw, 1)?;
-    let ext_n = ext.create(&mut s, l, f, Direction::NegX, nw, 1)?;
+    // The extension's shed roof (Q-63) and its walls, counterclockwise,
+    // following the roof (DEC-6), in one apply. The roof covers the
+    // extension's outline at its walls' exterior faces, with the ledger on
+    // the east wall's exterior face: its underside is 108 in there and 96 in
+    // at the outer side (Q-68); the ledger edge takes no overhang.
+    let roof = s.id_ahead(0);
+    let ext = WallSpec {
+        top: Some(WallTop::Roof { roof }),
+        ..spec(new)
+    };
+    let ids = s.apply_all(vec![
+        Action::CreateRoof(CreateRoof {
+            storey,
+            footprint: Boundary::Explicit {
+                points: vec![pt(216, 36), pt(280, 36), pt(280, 396), pt(216, 396)],
+            },
+            slope_direction: None,
+            high_edge_height: Some(stated(108)),
+            low_edge_height: Some(stated(96)),
+            pitch: None,
+            ledger: Some(outside(east_3)),
+            overhang: None,
+            thickness: None,
+            fascia_depth: None,
+            material_slots: BTreeMap::new(),
+        }),
+        ext.action(d, k, Direction::PosX, nw, 1),
+        ext.action(k, l, Direction::PosY, nw, 1),
+        ext.action(l, f, Direction::NegX, nw, 1),
+    ])?;
+    if ids[0] != roof {
+        return Err("the roof id was mispredicted".into());
+    }
+    let (ext_s, ext_e, ext_n) = (ids[1], ids[2], ids[3]);
 
     // The outline: 18 ft E-W by 36 ft N-S (Q-61), from the datum.
     s.distance(datum_ref(sw), outside(west_2), Axis::X, 0)?;
@@ -572,27 +660,7 @@ pub fn shop() -> Result<String, String> {
     let south_west = s.space(storey, "South room west", pt(36, 60))?;
     let south_east = s.space(storey, "South room east", pt(140, 60))?;
     let extension = s.space(storey, "Extension", pt(248, 216))?;
-    for space in [shop, south_west, south_east, extension] {
-        s.slab(storey, space, None)?;
-    }
-
-    // The extension's shed roof (Q-63): over its outline, ledger on the
-    // east wall's exterior face, 108 in there and 96 in at the outer side.
-    s.apply(Action::CreateRoof(CreateRoof {
-        storey,
-        footprint: Boundary::Explicit {
-            points: vec![pt(216, 36), pt(280, 36), pt(280, 396), pt(216, 396)],
-        },
-        slope_direction: None,
-        high_edge_height: stated(108),
-        low_edge_height: Some(stated(96)),
-        pitch: None,
-        ledger: Some(outside(east_3)),
-        overhang: None,
-        thickness: None,
-        fascia_depth: None,
-        material_slots: BTreeMap::new(),
-    }))?;
+    s.slab(storey, vec![shop, south_west, south_east, extension], None)?;
 
     // Equipment (Q-64): G-2 sizes where given, otherwise proposed sizes;
     // positions chosen in the large room, proposed, clear of walls, doors

@@ -61,7 +61,7 @@
       "type": "string"
     },
     "Boundary": {
-      "description": "A rectilinear boundary given explicitly or taken from a space.",
+      "description": "A rectilinear boundary given explicitly or taken from spaces.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -85,6 +85,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "The space's outline: its walls' inner faces.",
           "properties": {
             "kind": {
               "const": "from_space",
@@ -97,6 +98,27 @@
           "required": [
             "kind",
             "space"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The union of the spaces and the walls bounding them, out to each\nbounding wall's far face (DEC-5).",
+          "properties": {
+            "kind": {
+              "const": "from_spaces",
+              "type": "string"
+            },
+            "spaces": {
+              "items": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "spaces"
           ],
           "type": "object"
         }
@@ -1186,7 +1208,16 @@
           "$ref": "#/$defs/Boundary"
         },
         "high_edge_height": {
-          "$ref": "#/$defs/Sourced"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The underside at the high edge (Q-68). Null with a pitch and a low\nedge height: then derived from them."
         },
         "ledger": {
           "anyOf": [
@@ -1268,8 +1299,7 @@
       },
       "required": [
         "storey",
-        "footprint",
-        "high_edge_height"
+        "footprint"
       ],
       "type": "object"
     },
@@ -2628,6 +2658,24 @@
           "required": [
             "kind",
             "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The underside of this roof: sloped along the slope, level at the\nunderside on the higher face across it (DEC-6). Derived.",
+          "properties": {
+            "kind": {
+              "const": "roof",
+              "type": "string"
+            },
+            "roof": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "roof"
           ],
           "type": "object"
         }

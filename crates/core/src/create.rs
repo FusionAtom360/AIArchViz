@@ -148,7 +148,10 @@ pub struct CreateRoof {
     /// Required without a ledger; derived with one, so then null.
     #[serde(default)]
     pub slope_direction: Option<Direction>,
-    pub high_edge_height: Sourced<Length>,
+    /// The underside at the high edge (Q-68). Null with a pitch and a low
+    /// edge height: then derived from them.
+    #[serde(default)]
+    pub high_edge_height: Option<Sourced<Length>>,
     #[serde(default)]
     pub low_edge_height: Option<Sourced<Length>>,
     #[serde(default)]
@@ -322,6 +325,12 @@ fn boundary_exists(doc: &Document, b: &Boundary) -> Result<(), CommandError> {
     match b {
         Boundary::Explicit { .. } => Ok(()),
         Boundary::FromSpace { space } => need(&doc.spaces, *space),
+        Boundary::FromSpaces { spaces } => {
+            if spaces.is_empty() {
+                return Err(invalid("a boundary from spaces needs at least one space"));
+            }
+            spaces.iter().try_for_each(|s| need(&doc.spaces, *s))
+        }
     }
 }
 
@@ -356,6 +365,9 @@ pub fn create_wall(
     };
     if layers.is_empty() {
         return Err(invalid("a wall needs at least one layer"));
+    }
+    if let WallTop::Roof { roof } = &top {
+        need(&doc.roofs, *roof)?;
     }
     let catalog = catalog_materials(doc.project.id);
     for layer in &layers {
@@ -631,6 +643,19 @@ pub fn create_roof(doc: &mut Document, args: &CreateRoof, id: Uuid) -> Result<()
     else {
         return Err(invalid("roof defaults were not filled"));
     };
+    let high_edge_height = match (a.high_edge_height, &a.low_edge_height, &a.pitch) {
+        (Some(h), _, _) => h,
+        // Replaced from the low edge and the pitch at commit (derive_roofs, Q-68).
+        (None, Some(low), Some(_)) => Sourced {
+            value: low.value,
+            source: Source::Derived,
+        },
+        (None, _, _) => {
+            return Err(invalid(
+                "a roof needs a high edge height, or a low edge height and a pitch",
+            ));
+        }
+    };
     let id = fresh(&doc.roofs, id)?;
     doc.roofs.insert(
         id,
@@ -638,7 +663,7 @@ pub fn create_roof(doc: &mut Document, args: &CreateRoof, id: Uuid) -> Result<()
             storey: a.storey,
             footprint: a.footprint,
             slope_direction,
-            high_edge_height: a.high_edge_height,
+            high_edge_height,
             low_edge_height: a.low_edge_height,
             pitch: a.pitch,
             ledger: a.ledger,
@@ -847,7 +872,7 @@ mod tests {
                 storey,
                 footprint: Boundary::FromSpace { space: id(SPACE) },
                 slope_direction: Some(Direction::NegY),
-                high_edge_height: user(120),
+                high_edge_height: Some(user(120)),
                 low_edge_height: Some(user(108)),
                 pitch: None,
                 ledger: None,
@@ -1091,7 +1116,7 @@ mod tests {
                 points: vec![p(0, -60), p(120, -60), p(120, -2), p(0, -2)],
             },
             slope_direction: slope,
-            high_edge_height: user(108),
+            high_edge_height: Some(user(108)),
             low_edge_height: Some(user(96)),
             pitch: None,
             ledger,
@@ -1128,6 +1153,84 @@ mod tests {
             apply(&doc, &command(42, lean_to(None, None))),
             Err(CommandError::InvalidArguments(_))
         ));
+        Ok(())
+    }
+
+    /// DEC-6, Q-68: a wall may follow an existing roof; a roof with a pitch
+    /// and a low edge may leave its high edge to be derived; a slab from
+    /// spaces needs at least one existing space (DEC-5).
+    #[test]
+    fn roof_tops_derived_high_edges_and_slabs_from_spaces() -> Result<(), String> {
+        let doc = build(room())?;
+        let ghost = Uuid::from_bytes([0xEE; 16]);
+        let roof = id(SPACE + 2);
+        let follow = |top: Uuid| {
+            Action::CreateWall(CreateWall {
+                storey: id(STOREY),
+                node_a: id(SW),
+                node_b: id(NE),
+                direction: Direction::PosX,
+                function: Function::New,
+                layers: None,
+                left_extent: None,
+                base_offset: None,
+                top: Some(WallTop::Roof { roof: top }),
+                join_priority: None,
+            })
+        };
+        assert_eq!(
+            apply(&doc, &command(120, follow(ghost))),
+            Err(CommandError::UnknownEntity(ghost))
+        );
+        let after = apply(&doc, &command(121, follow(roof))).map_err(|e| e.to_string())?;
+        assert_eq!(
+            after.walls.get(&id(121)).map(|w| w.top.clone()),
+            Some(WallTop::Roof { roof })
+        );
+
+        let Action::CreateRoof(mut r) = lean_to(None, Some(Direction::NegY)) else {
+            return Err("not a roof".into());
+        };
+        r.high_edge_height = None;
+        r.pitch = Some(Sourced {
+            value: Pitch { rise: 1, run: 2 },
+            source: Source::UserStated,
+        });
+        let after =
+            apply(&doc, &command(122, Action::CreateRoof(r.clone()))).map_err(|e| e.to_string())?;
+        let d = derive(after).map_err(|e| format!("{e:?}"))?.document;
+        let made = d.roofs.get(&id(122)).ok_or("no roof")?;
+        // A 58 in run at 1:2 rises 29 in above the stated 96 in low edge.
+        assert_eq!(
+            made.high_edge_height,
+            Sourced {
+                value: len(125),
+                source: Source::Derived
+            }
+        );
+        r.pitch = None;
+        assert!(matches!(
+            apply(&doc, &command(123, Action::CreateRoof(r))),
+            Err(CommandError::InvalidArguments(_))
+        ));
+
+        let slab = |spaces: Vec<Uuid>| {
+            Action::CreateSlab(CreateSlab {
+                storey: id(STOREY),
+                boundary: Boundary::FromSpaces { spaces },
+                thickness: None,
+                elevation: None,
+            })
+        };
+        assert!(matches!(
+            apply(&doc, &command(124, slab(vec![]))),
+            Err(CommandError::InvalidArguments(_))
+        ));
+        assert_eq!(
+            apply(&doc, &command(125, slab(vec![id(SPACE), ghost]))),
+            Err(CommandError::UnknownEntity(ghost))
+        );
+        assert!(apply(&doc, &command(126, slab(vec![id(SPACE)]))).is_ok());
         Ok(())
     }
 

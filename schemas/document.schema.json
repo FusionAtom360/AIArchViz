@@ -55,7 +55,7 @@
       "type": "string"
     },
     "Boundary": {
-      "description": "A rectilinear boundary given explicitly or taken from a space.",
+      "description": "A rectilinear boundary given explicitly or taken from spaces.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -79,6 +79,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "The space's outline: its walls' inner faces.",
           "properties": {
             "kind": {
               "const": "from_space",
@@ -91,6 +92,27 @@
           "required": [
             "kind",
             "space"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The union of the spaces and the walls bounding them, out to each\nbounding wall's far face (DEC-5).",
+          "properties": {
+            "kind": {
+              "const": "from_spaces",
+              "type": "string"
+            },
+            "spaces": {
+              "items": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "spaces"
           ],
           "type": "object"
         }
@@ -1431,7 +1453,7 @@
         },
         "high_edge_height": {
           "$ref": "#/$defs/Sourced",
-          "description": "Above the storey elevation, at the footprint's high edge (Q-44)."
+          "description": "The underside above the storey elevation at the high edge (Q-44,\nQ-68); derived from the low edge and the pitch when not given."
         },
         "ledger": {
           "anyOf": [
@@ -1453,7 +1475,7 @@
               "type": "null"
             }
           ],
-          "description": "Above the storey elevation, at the footprint's low side; derived from\nthe pitch when there is one (Q-44)."
+          "description": "The underside above the storey elevation at the footprint's low side;\nderived from the pitch when the high edge is given (Q-44, Q-68)."
         },
         "material_slots": {
           "additionalProperties": {
@@ -1817,6 +1839,11 @@
           "const": "occurrence_overlap",
           "description": "An occurrence overlaps a wall or another occurrence (Q-27, Q-32).",
           "type": "string"
+        },
+        {
+          "const": "wall_top",
+          "description": "A wall that follows a roof names no roof, or lies outside the roof's\nfootprint plus overhangs (DEC-6).",
+          "type": "string"
         }
       ]
     },
@@ -1917,6 +1944,24 @@
           "required": [
             "kind",
             "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The underside of this roof: sloped along the slope, level at the\nunderside on the higher face across it (DEC-6). Derived.",
+          "properties": {
+            "kind": {
+              "const": "roof",
+              "type": "string"
+            },
+            "roof": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "roof"
           ],
           "type": "object"
         }

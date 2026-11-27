@@ -31,7 +31,7 @@ That one command:
 Expected summary lines:
 
 ```text
-shop: 0 conflicts, 24 underconstrained classes, 0 violations, 102 Proposed values
+shop: 0 conflicts, 24 underconstrained classes, 0 violations, 92 Proposed values
 l-room: 0 conflicts, 2 underconstrained classes, 0 violations, 5 Proposed values
 ```
 
@@ -77,8 +77,15 @@ By hand, in a UE 5.8 editor project:
    18'-0" (548.64 cm) east-west. The west wall's exterior face runs 36'-0" (1097.28 cm)
    north-south. The garage door opening is 12'-0" (365.76 cm) wide and 9'-1" (276.86 cm)
    tall.
-4. Walk the shop in Play In Editor. Note anything wrong, and take screenshots of the fiducial
+4. Check the geometry fixed in T-122b. Every element is one welded solid with no normals, so
+   UE must compute flat normals (Q-70): faces must look flat-shaded, not smoothed across
+   edges. If UE smooths them, record it, and the fallback is split vertices with normals
+   (Q-70 (b)). The floor is closed under every door, and each slab reaches the walls'
+   exterior faces (DEC-5). The shop roof starts at the east wall's exterior face, and no roof
+   shows through a wall or ceiling. The extension walls and every L-room wall meet the roof's
+   underside with no gap (DEC-6).
+5. Walk the shop in Play In Editor. Note anything wrong, and take screenshots of the fiducial
    readings, the measurement and the walk.
 
-Record the outcomes in docs/DECISIONS.md: fiducials (S-3), the measured dimension, and the
-screenshots.
+Record the outcomes in docs/DECISIONS.md: fiducials (S-3), the measured dimension, the
+shading (Q-70), and the screenshots.

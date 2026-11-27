@@ -451,12 +451,9 @@ fn an_independent_reader_parses_it() {
         for p in mesh.primitives() {
             let r = p.reader(|_| blob.as_deref());
             let positions = r.read_positions().map(|i| i.count()).unwrap_or(0);
-            let normals: Vec<[f32; 3]> = r.read_normals().map(|i| i.collect()).unwrap_or_default();
-            assert_eq!(positions, normals.len());
-            for n in normals {
-                let l = n.iter().map(|c| c * c).sum::<f32>();
-                assert!((l - 1.0).abs() < 1e-5);
-            }
+            // Q-70: no normals; readers compute flat ones.
+            assert!(positions > 0);
+            assert!(r.read_normals().is_none());
             let indices = r.read_indices().map(|i| i.into_u32().count()).unwrap_or(0);
             assert!(indices > 0 && indices % 3 == 0);
         }
@@ -482,4 +479,159 @@ fn clean_drops_repeats_and_collinear_points_and_turns_counterclockwise() {
     let cw = [(0, 0), (0, 5), (0, 10), (10, 10), (10, 0), (10, 0)];
     assert_eq!(clean(&cw), Some(vec![(10, 0), (10, 10), (0, 10), (0, 0)]));
     assert_eq!(clean(&[(0, 0), (5, 0), (10, 0)]), None);
+}
+
+/// The L-room with the roof bearing on its walls (Q-68, DEC-5, DEC-6): the
+/// footprint is the walls' exterior outline, the underside 120 in at the
+/// low side with the high edge from the 2:12 pitch, every wall following it.
+pub(crate) fn l_room_under_roof() -> Document {
+    let mut doc = l_room(true);
+    let roof = uid(16, 0);
+    if let Some(r) = doc.roofs.get_mut(&roof) {
+        r.footprint = Boundary::FromSpaces {
+            spaces: doc.spaces.keys().copied().collect(),
+        };
+        r.high_edge_height = Sourced {
+            value: len(0),
+            source: Source::Derived,
+        };
+        r.low_edge_height = Some(user(120 * IN));
+    }
+    for w in doc.walls.values_mut() {
+        w.top = WallTop::Roof { roof };
+    }
+    derive(doc)
+        .map(|d| d.document)
+        .unwrap_or_else(|e| panic!("derive: {e}"))
+}
+
+/// A mesh node's name, POSITION values (as raw bits) and triangles.
+type Mesh = (String, Vec<[u32; 3]>, Vec<[u32; 3]>);
+
+/// Each mesh node's POSITION values and triangle index triples.
+fn meshes(json: &Value, bin: &[u8]) -> Vec<Mesh> {
+    let slice = |accessor: &Value| {
+        let a = &json["accessors"][accessor.as_u64().unwrap_or(0) as usize];
+        let v = &json["bufferViews"][a["bufferView"].as_u64().unwrap_or(0) as usize];
+        let off = v["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let len = v["byteLength"].as_u64().unwrap_or(0) as usize;
+        bin[off..off + len].to_vec()
+    };
+    let mut out = Vec::new();
+    for n in json["nodes"].as_array().into_iter().flatten() {
+        let Some(mesh) = n["mesh"].as_u64() else {
+            continue;
+        };
+        let prim = &json["meshes"][mesh as usize]["primitives"][0];
+        let positions: Vec<[u32; 3]> = slice(&prim["attributes"]["POSITION"])
+            .chunks(12)
+            .map(|c| {
+                [
+                    u32_at(c, 0) as u32,
+                    u32_at(c, 4) as u32,
+                    u32_at(c, 8) as u32,
+                ]
+            })
+            .collect();
+        let tris: Vec<[u32; 3]> = slice(&prim["indices"])
+            .chunks(12)
+            .map(|c| {
+                [
+                    u32_at(c, 0) as u32,
+                    u32_at(c, 4) as u32,
+                    u32_at(c, 8) as u32,
+                ]
+            })
+            .collect();
+        out.push((
+            n["name"].as_str().unwrap_or_default().to_string(),
+            positions,
+            tris,
+        ));
+    }
+    out
+}
+
+/// Q-70: every mesh has one vertex per distinct position, no normals, and
+/// is closed: each edge is shared by exactly two triangles, once in each
+/// direction, so the surface is watertight and consistently wound.
+pub(crate) fn assert_welded_and_closed(glb: &[u8]) {
+    let (json, bin) = chunks(glb);
+    let all = meshes(&json, &bin);
+    assert!(!all.is_empty());
+    for m in json["meshes"].as_array().into_iter().flatten() {
+        let attributes = &m["primitives"][0]["attributes"];
+        assert!(attributes.get("NORMAL").is_none(), "{m}");
+    }
+    for (name, positions, tris) in all {
+        let distinct: std::collections::BTreeSet<_> = positions.iter().collect();
+        assert_eq!(distinct.len(), positions.len(), "{name}: repeated vertices");
+        let mut edges: std::collections::BTreeMap<(u32, u32), i32> = Default::default();
+        for t in &tris {
+            assert!(
+                t[0] != t[1] && t[1] != t[2] && t[0] != t[2],
+                "{name}: degenerate"
+            );
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *edges.entry((a, b)).or_default() += 1;
+            }
+        }
+        for (&(a, b), &count) in &edges {
+            assert_eq!(count, 1, "{name}: edge {a}-{b} used {count} times one way");
+            assert_eq!(edges.get(&(b, a)), Some(&1), "{name}: edge {a}-{b} is open");
+        }
+        let used: std::collections::BTreeSet<u32> = tris.iter().flatten().copied().collect();
+        assert_eq!(used.len(), positions.len(), "{name}: unused vertices");
+    }
+}
+
+/// Done when (T-122b): each GLB element has one vertex per distinct
+/// position and is a closed solid.
+#[test]
+fn every_element_is_one_welded_closed_solid() {
+    assert_welded_and_closed(&glb(&l_room(true)));
+    assert_welded_and_closed(&glb(&l_room(false)));
+    assert_welded_and_closed(&glb(&l_room_under_roof()));
+}
+
+/// Q-68: the roof's stated heights are its underside, with the thickness
+/// above; walls that follow it reach the underside. The L-room under its
+/// roof: underside 120 in at y = -3 and 151 in at y = 183 (2:12 over 186 in),
+/// overhangs 12 in, so 118 in at y = -15 and 153 in at y = 195; 6 in thick.
+#[test]
+fn the_roof_sits_on_its_underside_and_the_walls_reach_it() {
+    let doc = l_room_under_roof();
+    let (json, bin) = chunks(&glb(&doc));
+    let roof = node(&json, "roof 10000000-0000-0000-0000-000000000000");
+    let (lo, hi) = bounds(&triangles(&json, &bin, roof));
+    assert!(close(lo, [-15.0 * M, 118.0 * M, -195.0 * M]), "{lo:?}");
+    assert!(close(hi, [255.0 * M, 159.0 * M, 15.0 * M]), "{hi:?}");
+    // The north wall W-005 is level at the underside on its higher face,
+    // y = 183: 151 in.
+    let (_, hi) = bounds(&triangles(&json, &bin, node(&json, "W-005")));
+    assert!((hi[1] - 151.0 * M).abs() < 1e-6, "{hi:?}");
+    // The west wall W-006 slopes from 120 in at y = -3 to 151 in at y = 183.
+    let w6 = triangles(&json, &bin, node(&json, "W-006"));
+    let top_at = |z: f64| {
+        w6.iter()
+            .flatten()
+            .filter(|p| (p[2] - z).abs() < 1e-6)
+            .map(|p| p[1])
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    assert!((top_at(3.0 * M) - 120.0 * M).abs() < 1e-6);
+    assert!((top_at(-183.0 * M) - 151.0 * M).abs() < 1e-6);
+    // Walls lose exactly their openings' voids under the sloped tops too:
+    // the solid is the profile area times the thickness.
+    let vol = volume(&w6);
+    // W-006 runs y = 183 down to -3, mitered at both ends and 6 in thick:
+    // a trapezoid of mean length 180 in whose every line along the wall is
+    // centered on y = 90, where the top is 135.5 in; less the plain
+    // opening's 30 x 84 x 6.
+    let expected = 135.5 * 180.0 * 6.0 - 30.0 * 84.0 * 6.0;
+    assert!(
+        (vol - expected).abs() < 1e-3 * expected,
+        "{vol} vs {expected}"
+    );
 }

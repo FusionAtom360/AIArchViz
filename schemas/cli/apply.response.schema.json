@@ -101,7 +101,7 @@
       "type": "string"
     },
     "Boundary": {
-      "description": "A rectilinear boundary given explicitly or taken from a space.",
+      "description": "A rectilinear boundary given explicitly or taken from spaces.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -125,6 +125,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "The space's outline: its walls' inner faces.",
           "properties": {
             "kind": {
               "const": "from_space",
@@ -137,6 +138,27 @@
           "required": [
             "kind",
             "space"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The union of the spaces and the walls bounding them, out to each\nbounding wall's far face (DEC-5).",
+          "properties": {
+            "kind": {
+              "const": "from_spaces",
+              "type": "string"
+            },
+            "spaces": {
+              "items": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "spaces"
           ],
           "type": "object"
         }
@@ -1389,7 +1411,16 @@
           "$ref": "#/$defs/Boundary"
         },
         "high_edge_height": {
-          "$ref": "#/$defs/Sourced"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The underside at the high edge (Q-68). Null with a pitch and a low\nedge height: then derived from them."
         },
         "ledger": {
           "anyOf": [
@@ -1471,8 +1502,7 @@
       },
       "required": [
         "storey",
-        "footprint",
-        "high_edge_height"
+        "footprint"
       ],
       "type": "object"
     },
@@ -1816,6 +1846,19 @@
           },
           "required": [
             "roof"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "What is wrong with a wall that follows a roof (DEC-6).",
+          "properties": {
+            "wall_top": {
+              "$ref": "#/$defs/WallTopProblem"
+            }
+          },
+          "required": [
+            "wall_top"
           ],
           "type": "object"
         },
@@ -2622,7 +2665,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The head is above the wall's top by this much.",
+          "description": "The head is above the wall's top by this much; for a wall that\nfollows a roof, at or above it (DEC-6).",
           "properties": {
             "above_top": {
               "properties": {
@@ -3373,6 +3416,11 @@
             "solve"
           ],
           "type": "object"
+        },
+        {
+          "const": "no_low_height",
+          "description": "Neither a low edge height nor a pitch is given.",
+          "type": "string"
         }
       ]
     },
@@ -3781,6 +3829,32 @@
             "not_simple"
           ],
           "type": "object"
+        },
+        {
+          "const": "no_spaces",
+          "description": "A boundary from spaces lists none (DEC-5).",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A boundary from spaces lists spaces on different storeys (DEC-5).",
+          "properties": {
+            "storey_mismatch": {
+              "properties": {
+                "space": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "space"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "storey_mismatch"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -3877,6 +3951,11 @@
           "const": "occurrence_overlap",
           "description": "An occurrence overlaps a wall or another occurrence (Q-27, Q-32).",
           "type": "string"
+        },
+        {
+          "const": "wall_top",
+          "description": "A wall that follows a roof names no roof, or lies outside the roof's\nfootprint plus overhangs (DEC-6).",
+          "type": "string"
         }
       ]
     },
@@ -3922,6 +4001,39 @@
             "height"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The underside of this roof: sloped along the slope, level at the\nunderside on the higher face across it (DEC-6). Derived.",
+          "properties": {
+            "kind": {
+              "const": "roof",
+              "type": "string"
+            },
+            "roof": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "roof"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WallTopProblem": {
+      "description": "What is wrong with a wall that follows a roof (DEC-6).",
+      "oneOf": [
+        {
+          "const": "unknown_roof",
+          "description": "The roof it names does not exist.",
+          "type": "string"
+        },
+        {
+          "const": "outside_roof",
+          "description": "Its footprint is not inside the roof's footprint plus overhangs.",
+          "type": "string"
         }
       ]
     }

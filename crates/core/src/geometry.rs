@@ -21,16 +21,25 @@
 //! counterclockwise from its vertex with the lowest x, then the lowest y.
 //!
 //! A wall's elevation profile runs along its axis in its direction and up
-//! from its base to its top; each opening voids a rectangle from its start
-//! to its end edge and from its sill (above the storey elevation) to its
-//! head. An opening must lie in the stretch where its host has full
+//! from its base to its top edge; each opening voids a rectangle from its
+//! start to its end edge and from its sill (above the storey elevation) to
+//! its head. An opening must lie in the stretch where its host has full
 //! thickness on both faces, the minimum jamb distance from either end, and
 //! between the wall's base and top (7.7, Q-22).
+//!
+//! The top edge has vertices only at the wall's ends, at its faces' end
+//! cuts and at opening void edges. It is level for a storey or explicit top.
+//! A wall that follows a roof (DEC-6) takes the roof's underside: along the
+//! slope, the underside at each vertex (RoofGeometry::underside, rounded
+//! half to even); across it, level at the underside on the wall's higher
+//! face. Its openings' heads must stay below the top at both void edges.
+//! While the roof is not well defined (a RoofDefinition violation), the wall
+//! stands to the storey height.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::document::{Direction, Document, JoinType, Point, WallTop};
+use crate::document::{Axis, Direction, Document, JoinType, Point, WallTop};
 use crate::identity::Uuid;
 use crate::length::Length;
 
@@ -436,9 +445,13 @@ pub struct WallProfile {
     /// The stretch where the wall has its full thickness on both faces.
     pub full_start: Length,
     pub full_end: Length,
-    /// Absolute elevations of the wall's base and top.
+    /// Absolute elevations of the wall's base and of the highest point of
+    /// its top edge.
     pub base: Length,
     pub top: Length,
+    /// The top edge: (along coordinate, absolute elevation) vertices in the
+    /// wall's direction, from `start` to `end`.
+    pub top_edge: Vec<(Length, Length)>,
     /// Ordered along the wall.
     pub voids: Vec<Void>,
 }
@@ -456,7 +469,8 @@ pub enum OpeningProblem {
     TooCloseToEnd { clearance: Length },
     /// The sill is below the wall's base by this much.
     BelowBase { by: Length },
-    /// The head is above the wall's top by this much.
+    /// The head is above the wall's top by this much; for a wall that
+    /// follows a roof, at or above it (DEC-6).
     AboveTop { by: Length },
 }
 
@@ -471,6 +485,24 @@ pub struct OpeningViolation {
 pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>, GeometryError> {
     let walls = walls(document)?;
     let (_, cuts) = joins(document, &walls)?;
+    // Each roof a wall follows: its geometry and storey elevation, or None
+    // while it is not well defined.
+    let mut roofs = BTreeMap::new();
+    for w in document.walls.values() {
+        if let WallTop::Roof { roof } = &w.top
+            && !roofs.contains_key(roof)
+        {
+            let defined = crate::roof::roof_geometry(document, *roof)
+                .ok()
+                .filter(|g| g.low_height.is_some())
+                .and_then(|g| {
+                    let r = document.roofs.get(roof)?;
+                    let s = document.storeys.get(&r.storey)?;
+                    Some((g, i128::from(s.elevation.value.nanometers())))
+                });
+            roofs.insert(*roof, defined);
+        }
+    }
     let to_len = |v: i128| {
         i64::try_from(v)
             .map(Length::from_nanometers)
@@ -488,9 +520,10 @@ pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>,
             .ok_or(GeometryError::UnknownEntity { id: wall.storey })?;
         let elevation = i128::from(storey.elevation.value.nanometers());
         let base = elevation + i128::from(wall.base_offset.value.nanometers());
-        let top = match &wall.top {
-            WallTop::Storey => elevation + i128::from(storey.floor_to_floor.value.nanometers()),
-            WallTop::Height { height } => base + i128::from(height.value.nanometers()),
+        let storey_top = elevation + i128::from(storey.floor_to_floor.value.nanometers());
+        let roof = match &wall.top {
+            WallTop::Roof { roof } => roofs.get(roof).and_then(Option::as_ref),
+            _ => None,
         };
         let cut = |end: usize| {
             cuts.get(&(i, end))
@@ -521,6 +554,42 @@ pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>,
             voids.push((s0 * dir, void));
         }
         voids.sort_by_key(|a| (a.0, a.1.opening));
+        // Top edge vertices: ends, face cuts and void edges, in direction order.
+        let mut along: Vec<i128> = vec![start, end, full_start, full_end];
+        for (_, v) in &voids {
+            along.push(i128::from(v.start.nanometers()));
+            along.push(i128::from(v.end.nanometers()));
+        }
+        along.sort_by_key(|u| u * dir);
+        along.dedup();
+        let height = |u: i128| -> Result<i128, GeometryError> {
+            let Some((g, level)) = roof else {
+                return Ok(match &wall.top {
+                    WallTop::Height { height } => base + i128::from(height.value.nanometers()),
+                    _ => storey_top,
+                });
+            };
+            let under = |s: i128| {
+                g.underside(to_len(s)?)
+                    .map(|h| level + i128::from(h.nanometers()))
+                    .map_err(|_| GeometryError::Overflow)
+            };
+            let wall_axis = if w.frame.along_x { Axis::X } else { Axis::Y };
+            if g.axis() == wall_axis {
+                under(u)
+            } else {
+                Ok(under(faces[0])?.max(under(faces[1])?))
+            }
+        };
+        let mut top_edge = Vec::with_capacity(along.len());
+        for u in along {
+            top_edge.push((to_len(u)?, to_len(height(u)?)?));
+        }
+        let top = top_edge
+            .iter()
+            .map(|e| e.1)
+            .max()
+            .unwrap_or(Length::from_nanometers(0));
         out.insert(
             w.id,
             WallProfile {
@@ -529,7 +598,8 @@ pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>,
                 full_start: to_len(full_start)?,
                 full_end: to_len(full_end)?,
                 base: to_len(base)?,
-                top: to_len(top)?,
+                top,
+                top_edge,
                 voids: voids.into_iter().map(|(_, v)| v).collect(),
             },
         );
@@ -591,9 +661,17 @@ pub fn opening_violations(
                 by: to_len(n(p.base) - n(v.sill))?,
             });
         }
-        if v.head > p.top {
+        // The lower of the top at the void's two edges; a roof-following
+        // top must stay above the head (DEC-6).
+        let top_at = |u: Length| p.top_edge.iter().find(|e| e.0 == u).map(|e| e.1);
+        let top = match (top_at(v.start), top_at(v.end)) {
+            (Some(a), Some(b)) => a.min(b),
+            _ => p.top,
+        };
+        let follows_roof = matches!(host.top, WallTop::Roof { .. });
+        if v.head > top || (follows_roof && v.head >= top) {
             push(OpeningProblem::AboveTop {
-                by: to_len(n(v.head) - n(p.top))?,
+                by: to_len(n(v.head) - n(top))?,
             });
         }
     }
@@ -1342,5 +1420,199 @@ mod tests {
                 prop_assert_eq!(Some(expected_layers), b.map(|g| g.layers.clone()));
             }
         }
+    }
+
+    // DEC-6: walls that follow a roof's underside.
+
+    const ROOF: Uuid = Uuid::from_bytes([15; 16]);
+
+    /// A 64 x 96 in room on 4 in walls (centerlines, walls counterclockwise
+    /// so their left faces are inside) under a shed roof sloping +X over the
+    /// exterior faces, -2 to 66 in: underside 108 in at x = -2 and 96 in at
+    /// x = 66, so 3/17 in down per inch, rarely on the nanometer grid. Every
+    /// wall follows the roof; the south wall has a window 20 to 40 in.
+    fn under_roof() -> Document {
+        let mut doc = build(
+            &[(1, 0, 0), (2, 64, 0), (3, 64, 96), (4, 0, 96)],
+            &[
+                (1, spec(1, 2, PosX, &[4], 2, 0)),
+                (2, spec(2, 3, PosY, &[4], 2, 0)),
+                (3, spec(3, 4, NegX, &[4], 2, 0)),
+                (4, spec(4, 1, NegY, &[4], 2, 0)),
+            ],
+        );
+        let p = |x: i64, y: i64| Point {
+            x: len(x * IN),
+            y: len(y * IN),
+        };
+        doc.roofs.insert(
+            ROOF,
+            Roof {
+                storey: uid(8, 0),
+                footprint: Boundary::Explicit {
+                    points: vec![p(-2, -2), p(66, -2), p(66, 98), p(-2, 98)],
+                },
+                slope_direction: Sourced {
+                    value: PosX,
+                    source: Source::UserStated,
+                },
+                high_edge_height: sourced(108 * IN),
+                low_edge_height: Some(sourced(96 * IN)),
+                pitch: None,
+                ledger: None,
+                overhang: Overhang {
+                    pos_x: sourced(12 * IN),
+                    neg_x: sourced(12 * IN),
+                    pos_y: sourced(12 * IN),
+                    neg_y: sourced(12 * IN),
+                },
+                thickness: sourced(8 * IN),
+                fascia_depth: sourced(6 * IN),
+                material_slots: Default::default(),
+            },
+        );
+        for w in doc.walls.values_mut() {
+            w.top = WallTop::Roof { roof: ROOF };
+        }
+        put_opening(&mut doc, 1, 1, 20, 20, 24, 36);
+        doc
+    }
+
+    /// The underside at x (nm), computed independently: 108 in minus
+    /// (x + 2 in) x 12 / 68, rounded half to even to the nanometer.
+    fn underside_at(x: i128) -> i128 {
+        let (n, d) = ((x + 2 * i128::from(IN)) * 12, 68);
+        let (q, r) = (n.div_euclid(d), n.rem_euclid(d));
+        let q = match (2 * r).cmp(&d) {
+            std::cmp::Ordering::Less => q,
+            std::cmp::Ordering::Greater => q + 1,
+            std::cmp::Ordering::Equal => q + (q & 1),
+        };
+        108 * i128::from(IN) - q
+    }
+
+    fn top_edge(p: &WallProfile) -> Vec<(i128, i128)> {
+        p.top_edge
+            .iter()
+            .map(|(u, z)| (i128::from(u.nanometers()), i128::from(z.nanometers())))
+            .collect()
+    }
+
+    /// DEC-6: along the slope the top edge is the underside, to the
+    /// nanometer, at the wall's ends, faces and opening void edges.
+    #[test]
+    fn a_wall_along_the_slope_follows_the_underside() -> Result<(), GeometryError> {
+        let profiles = wall_profiles(&under_roof())?;
+        let south = profiles.get(&wall_id(1)).ok_or(GeometryError::Overflow)?;
+        let i = |v: i64| i128::from(v * IN);
+        let us: Vec<i128> = top_edge(south).iter().map(|v| v.0).collect();
+        // Ends (miters: outer -2, 66; inner 2, 62) and the window's edges.
+        assert_eq!(us, vec![i(-2), i(2), i(20), i(40), i(62), i(66)]);
+        for (u, z) in top_edge(south) {
+            assert_eq!(z, underside_at(u), "at {u}");
+        }
+        assert_eq!(top_edge(south).first(), Some(&(i(-2), i(108))));
+        assert_eq!(top_edge(south).last(), Some(&(i(66), i(96))));
+        // The top is the highest point of the edge.
+        assert_eq!(i128::from(south.top.nanometers()), i(108));
+        // The north wall runs -X: its edge runs from x = 66 down to -2.
+        let north = profiles.get(&wall_id(3)).ok_or(GeometryError::Overflow)?;
+        let us: Vec<i128> = top_edge(north).iter().map(|v| v.0).collect();
+        assert_eq!(us, vec![i(66), i(62), i(2), i(-2)]);
+        for (u, z) in top_edge(north) {
+            assert_eq!(z, underside_at(u), "at {u}");
+        }
+        Ok(())
+    }
+
+    /// DEC-6: across the slope the top is level at the underside on the
+    /// wall's higher face, so no gap opens on either face.
+    #[test]
+    fn a_wall_across_the_slope_is_level_at_its_higher_face() -> Result<(), GeometryError> {
+        let profiles = wall_profiles(&under_roof())?;
+        let i = |v: i64| i128::from(v * IN);
+        // East wall: faces at x = 62 and 66; the higher face is 62.
+        let east = profiles.get(&wall_id(2)).ok_or(GeometryError::Overflow)?;
+        assert!(
+            top_edge(east)
+                .iter()
+                .all(|&(_, z)| z == underside_at(i(62)))
+        );
+        assert!(underside_at(i(62)) > underside_at(i(66)));
+        // West wall: faces at x = -2 and 2; the higher face is -2: 108 in.
+        let west = profiles.get(&wall_id(4)).ok_or(GeometryError::Overflow)?;
+        assert!(top_edge(west).iter().all(|&(_, z)| z == i(108)));
+        assert_eq!(
+            top_edge(west).iter().map(|v| v.0).collect::<Vec<_>>(),
+            vec![i(98), i(94), i(2), i(-2)]
+        );
+        Ok(())
+    }
+
+    /// DEC-6: the same document gives the same profiles whatever order its
+    /// walls were created in.
+    #[test]
+    fn roof_tops_do_not_depend_on_wall_order() -> Result<(), GeometryError> {
+        let doc = under_roof();
+        let mut reversed = doc.clone();
+        // Swap ids so the walls are stored, and tie-broken, in reverse.
+        reversed.walls = doc
+            .walls
+            .iter()
+            .map(|(id, w)| {
+                let n = id.as_bytes()[15];
+                (wall_id(5 - n), w.clone())
+            })
+            .collect();
+        for o in reversed.openings.values_mut() {
+            o.host = wall_id(4);
+        }
+        let a = wall_profiles(&doc)?;
+        let b = wall_profiles(&reversed)?;
+        for n in 1..=4u8 {
+            assert_eq!(a.get(&wall_id(n)), b.get(&wall_id(5 - n)), "wall {n}");
+        }
+        Ok(())
+    }
+
+    /// DEC-6: an opening head at or above a roof-following top is reported.
+    #[test]
+    fn an_opening_up_to_a_roof_top_is_reported() -> Result<(), GeometryError> {
+        let mut doc = under_roof();
+        // The window's head at 60 in fits; raise it to the top at its east
+        // edge (x = 40), the lower of its two edges.
+        let top_at_40 = underside_at(i128::from(40 * IN));
+        if let Some(o) = doc.openings.get_mut(&opening_id(1)) {
+            o.height = Sourced {
+                value: len(i64::try_from(top_at_40).unwrap_or(0) - 36 * IN),
+                source: Source::UserStated,
+            };
+        }
+        assert_eq!(
+            opening_violations(&doc, len(0))?,
+            vec![OpeningViolation {
+                opening: opening_id(1),
+                problem: OpeningProblem::AboveTop { by: len(0) },
+            }]
+        );
+        Ok(())
+    }
+
+    /// A roof that is not defined leaves its walls at the storey height;
+    /// validation reports the roof (RoofDefinition).
+    #[test]
+    fn an_undefined_roof_leaves_walls_at_the_storey_top() -> Result<(), GeometryError> {
+        let mut doc = under_roof();
+        if let Some(r) = doc.roofs.get_mut(&ROOF) {
+            r.low_edge_height = None;
+        }
+        let p = wall_profiles(&doc)?;
+        let south = p.get(&wall_id(1)).ok_or(GeometryError::Overflow)?;
+        assert!(
+            top_edge(south)
+                .iter()
+                .all(|&(_, z)| z == 120 * i128::from(IN))
+        );
+        Ok(())
     }
 }

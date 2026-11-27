@@ -588,8 +588,8 @@ expression: to_pretty_json(&scene).unwrap_or_default()
               4800600000
             ]
           ],
-          "z_max": 3403600000,
-          "z_min": 2413000000
+          "z_max": 3556000000,
+          "z_min": 2565400000
         }
       ],
       "id": "10000000-0000-0000-0000-000000000000",
@@ -605,7 +605,7 @@ expression: to_pretty_json(&scene).unwrap_or_default()
       "translation": [
         -228600000,
         -228600000,
-        2413000000
+        2565400000
       ]
     },
     {
