@@ -14,6 +14,9 @@
 //! - each driving Distance constraint as a dimension line, two extension
 //!   lines and its value in feet-inches on DIMENSIONS (the 11.1 fallback).
 //!
+//! Every layer names the Normal plot style placeholder (group 390), which
+//! AutoCAD 2018 requires in R2000 files (found at gate G-3).
+//!
 //! Coordinates are decimal inches with 8 decimals, computed in integer
 //! arithmetic; 1e-8 in is 0.254 nm, so every stored nanometer reads back.
 
@@ -90,6 +93,9 @@ pub fn parse_inches(text: &str) -> Option<i64> {
 }
 
 const MODEL_SPACE: &str = "22";
+/// The ACAD_PLOTSTYLENAME dictionary and its Normal placeholder.
+const PLOT_STYLE_NAMES: &str = "35";
+const PLOT_STYLE_NORMAL: &str = "36";
 const LAYERS: &[(&str, u8)] = &[
     ("0", 7),
     ("WALLS", 7),
@@ -507,7 +513,12 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
     for (i, (name, colour)) in LAYERS.iter().enumerate() {
         let h = format!("{:X}", 0x10 + i);
         record(&mut out, "LAYER", &h, "8", "AcDbLayerTableRecord", name);
-        out.pairs(&[(62, &colour.to_string()), (6, "Continuous")]);
+        // R2000 layers must name a plot style (G-3): the Normal placeholder.
+        out.pairs(&[
+            (62, &colour.to_string()),
+            (6, "Continuous"),
+            (390, PLOT_STYLE_NORMAL),
+        ]);
     }
     out.pair(0, "ENDTAB");
     table(&mut out, "STYLE", "9", 1);
@@ -612,6 +623,8 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
         (350, "31"),
         (3, "ACAD_LAYOUT"),
         (350, "32"),
+        (3, "ACAD_PLOTSTYLENAME"),
+        (350, PLOT_STYLE_NAMES),
     ]);
     out.pairs(&[
         (0, "DICTIONARY"),
@@ -633,6 +646,29 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
     ]);
     layout(&mut out, "33", "Model", "1", "0", "22");
     layout(&mut out, "34", "Layout1", "0", "1", "23");
+    // The plot style names dictionary, whose default is the Normal placeholder.
+    out.pairs(&[
+        (0, "ACDBDICTIONARYWDFLT"),
+        (5, PLOT_STYLE_NAMES),
+        (102, "{ACAD_REACTORS"),
+        (330, "30"),
+        (102, "}"),
+        (330, "30"),
+        (100, "AcDbDictionary"),
+        (281, "1"),
+        (3, "Normal"),
+        (350, PLOT_STYLE_NORMAL),
+        (100, "AcDbDictionaryWithDefault"),
+        (340, PLOT_STYLE_NORMAL),
+    ]);
+    out.pairs(&[
+        (0, "ACDBPLACEHOLDER"),
+        (5, PLOT_STYLE_NORMAL),
+        (102, "{ACAD_REACTORS"),
+        (330, PLOT_STYLE_NAMES),
+        (102, "}"),
+        (330, PLOT_STYLE_NAMES),
+    ]);
     out.pairs(&[(0, "ENDSEC"), (0, "EOF")]);
     Ok(out.text)
 }
@@ -979,6 +1015,86 @@ mod tests {
             })
             .collect();
         assert_eq!(read_back, expected);
+    }
+
+    /// The objects of a DXF text: (type, group pairs), in file order.
+    fn objects(text: &str) -> Vec<(String, Vec<(i32, String)>)> {
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        let mut out: Vec<(String, Vec<(i32, String)>)> = Vec::new();
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { continue };
+            let code: i32 = code.trim().parse().unwrap_or(-1);
+            if code == 0 {
+                out.push((value.to_string(), Vec::new()));
+            } else if let Some(last) = out.last_mut() {
+                last.1.push((code, value.to_string()));
+            }
+        }
+        out
+    }
+
+    fn value(pairs: &[(i32, String)], code: i32) -> Option<String> {
+        pairs
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, v)| v.clone())
+    }
+
+    /// G-3, first attempt: AutoCAD 2018 refused the file with "Error in
+    /// LAYER Table. Did not receive PlotStyleName". Every R2000 layer must
+    /// name the Normal plot style placeholder through group 390.
+    #[test]
+    fn every_layer_names_the_normal_plot_style() {
+        let objects = objects(&written());
+        let handle_of = |kind: &str| -> Vec<String> {
+            objects
+                .iter()
+                .filter(|(t, _)| t == kind)
+                .filter_map(|(_, p)| value(p, 5))
+                .collect()
+        };
+        let placeholders = handle_of("ACDBPLACEHOLDER");
+        assert_eq!(placeholders.len(), 1);
+        let layers: Vec<&Vec<(i32, String)>> = objects
+            .iter()
+            .filter(|(t, _)| t == "LAYER")
+            .map(|(_, p)| p)
+            .collect();
+        assert_eq!(layers.len(), 9);
+        for layer in layers {
+            assert_eq!(
+                value(layer, 390),
+                Some(placeholders[0].clone()),
+                "{layer:?}"
+            );
+        }
+        // The placeholder is the default, named Normal, of ACAD_PLOTSTYLENAME.
+        let with_default = objects
+            .iter()
+            .find(|(t, _)| t == "ACDBDICTIONARYWDFLT")
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        assert_eq!(value(&with_default, 3), Some("Normal".to_string()));
+        assert_eq!(value(&with_default, 350), Some(placeholders[0].clone()));
+        assert_eq!(value(&with_default, 340), Some(placeholders[0].clone()));
+        let root = objects
+            .iter()
+            .find(|(t, p)| t == "DICTIONARY" && value(p, 330).as_deref() == Some("0"))
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        let named: Vec<(String, String)> = root
+            .iter()
+            .zip(root.iter().skip(1))
+            .filter(|(a, b)| a.0 == 3 && b.0 == 350)
+            .map(|(a, b)| (a.1.clone(), b.1.clone()))
+            .collect();
+        assert!(
+            named.contains(&(
+                "ACAD_PLOTSTYLENAME".to_string(),
+                value(&with_default, 5).unwrap_or_default()
+            )),
+            "{named:?}"
+        );
     }
 
     #[test]
