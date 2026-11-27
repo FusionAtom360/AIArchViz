@@ -114,7 +114,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - T-122b changed the mesh format: welded vertices, no normals, and walls as cell-grid solids. Nobody has re-run the validator on the format that G-4 will import.
 
 ### M-4: The float lint misses unsuffixed literals and identifiers that contain f64
-- **Status: open**, planned as T-199.
+- **Status: closed** by T-199 (2026-11-27). The lint also flags decimal and exponent float literals and identifiers containing `f32` or `f64` in core code outside comments and strings; covered by `flags_decimal_and_exponent_literals`, `identifiers_containing_the_text_are_flagged` and `ranges_tuple_fields_and_integers_pass`.
 - **Where:** `xtask/src/float_lint.rs:65-91`. A token preceded by an identifier character is flagged only when the word starts with a digit.
 - **What gets through:**
   - `let x = 0.5;` has no `f64` token at all.

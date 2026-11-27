@@ -1,10 +1,17 @@
-//! Float lint: fails when `f32` or `f64` appears in crates/core sources.
+//! Float lint: fails when crates/core sources use floating point.
 //!
-//! Comments (line, block, nested block and doc comments) are excluded. Every
-//! other occurrence counts, including type names, suffixed literals such as
-//! `1.0f64`, and string contents. The scanner tracks string, raw string and
-//! char literals only so that `//` or `/*` inside them is not mistaken for a
-//! comment.
+//! Comments (line, block, nested block and doc comments) are excluded. Three
+//! forms are flagged:
+//! - the words `f32` and `f64`, including type names, paths, suffixed literals
+//!   such as `1.0f64`, and string contents;
+//! - any identifier that contains `f32` or `f64` (`as_f64`, `f64_from`);
+//! - decimal and exponent float literals (`0.5`, `1e3`, `2.`), lexed as Rust
+//!   does, so ranges (`0..5`), tuple fields (`x.0`) and integer literals with
+//!   suffixes (`7u8`, `0xf64`) pass.
+//!
+//! The last two are checked outside comments and outside string and char
+//! literals; the scanner tracks those literals so that `//` or `/*` inside
+//! them is not mistaken for a comment.
 
 use std::fmt;
 use std::fs;
@@ -19,39 +26,67 @@ pub struct Finding {
     pub line: usize,
     /// 1-based column, counted in characters.
     pub column: usize,
+    /// `f32`, `f64` or [`FLOAT_LITERAL`].
     pub token: &'static str,
 }
 
 impl fmt::Display for Finding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let what = if self.token == FLOAT_LITERAL {
+            "a float literal".to_string()
+        } else {
+            format!("`{}`", self.token)
+        };
         write!(
             f,
-            "{}:{}:{}: `{}` is forbidden in crates/core (spec 5.5)",
+            "{}:{}:{}: {what} is forbidden in crates/core (spec 5.5)",
             self.path.display(),
             self.line,
             self.column,
-            self.token
         )
     }
 }
 
 const TOKENS: [&str; 2] = ["f32", "f64"];
 
+/// Token reported for a decimal or exponent float literal.
+pub const FLOAT_LITERAL: &str = "float literal";
+
+/// What a source character belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Code,
+    Comment,
+    /// Inside a string, raw string or char literal, quotes included.
+    Literal,
+}
+
 fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// Positions (line, column, token) of `f32` / `f64` outside comments.
+/// Positions (line, column, token) of forbidden forms outside comments,
+/// in source order.
 pub fn scan_source(src: &str) -> Vec<(usize, usize, &'static str)> {
     let chars: Vec<char> = src.chars().collect();
-    let code = code_mask(&chars);
+    let region = region_mask(&chars);
+    let mut hits: Vec<(usize, &'static str)> = (0..chars.len())
+        .filter_map(|i| token_at(&chars, &region, i).map(|t| (i, t)))
+        .collect();
+    hits.extend(
+        float_literals(&chars, &region)
+            .into_iter()
+            .map(|i| (i, FLOAT_LITERAL)),
+    );
+    hits.sort();
+    let mut hits = hits.into_iter().peekable();
     let mut out = Vec::new();
     let (mut line, mut column) = (1, 1);
-    for i in 0..chars.len() {
-        if let Some(token) = token_at(&chars, &code, i) {
+    for (i, &c) in chars.iter().enumerate() {
+        while let Some((_, token)) = hits.next_if(|&(at, _)| at == i) {
             out.push((line, column, token));
         }
-        if chars[i] == '\n' {
+        if c == '\n' {
             line += 1;
             column = 1;
         } else {
@@ -61,79 +96,152 @@ pub fn scan_source(src: &str) -> Vec<(usize, usize, &'static str)> {
     out
 }
 
-/// Returns the forbidden token starting at `i`, if any.
-fn token_at(chars: &[char], code: &[bool], i: usize) -> Option<&'static str> {
+/// Returns the forbidden `f32` / `f64` token starting at `i`, if any.
+fn token_at(chars: &[char], region: &[Region], i: usize) -> Option<&'static str> {
     let token = TOKENS.into_iter().find(|t| {
         let len = t.chars().count();
         i + len <= chars.len()
             && t.chars().zip(&chars[i..i + len]).all(|(a, &b)| a == b)
-            && code[i..i + len].iter().all(|&c| c)
+            && region[i..i + len].iter().all(|&r| r != Region::Comment)
     })?;
     let end = i + token.len();
-    if end < chars.len() && is_ident_char(chars[end]) {
-        return None;
+    let at_end = end >= chars.len() || !is_ident_char(chars[end]);
+    let mut start = i;
+    while start > 0 && is_ident_char(chars[start - 1]) {
+        start -= 1;
     }
-    if i > 0 && is_ident_char(chars[i - 1]) {
-        // Part of a longer word: flag only a numeric literal suffix (`1.0f64`),
-        // not an identifier (`af64`) or a hex integer (`0xf64`).
-        let mut start = i;
-        while start > 0 && is_ident_char(chars[start - 1]) {
-            start -= 1;
-        }
-        let first = chars[start];
+    if start == i && at_end {
+        return Some(token);
+    }
+    let first = chars[start];
+    if first.is_ascii_digit() {
+        // A numeric literal: flag the suffix of `1.0f64`, not a hex integer
+        // (`0xf64`).
         let hex = first == '0' && matches!(chars.get(start + 1), Some('x' | 'X'));
-        if !first.is_ascii_digit() || hex {
-            return None;
-        }
+        return (at_end && !hex).then_some(token);
     }
-    Some(token)
+    // Part of an identifier (`as_f64`, `f64_from`): flagged in code only.
+    (region[i] == Region::Code).then_some(token)
 }
 
-/// Marks each character `true` when it is outside every comment.
-fn code_mask(chars: &[char]) -> Vec<bool> {
+/// Start indices of decimal and exponent float literals in code.
+fn float_literals(chars: &[char], region: &[Region]) -> Vec<usize> {
     let n = chars.len();
     let at = |i: usize| chars.get(i).copied();
-    let mut code = vec![true; n];
+    let digits_end = |mut j: usize| {
+        while j < n && (chars[j].is_ascii_digit() || chars[j] == '_') {
+            j += 1;
+        }
+        j
+    };
+    let word_end = |mut j: usize| {
+        while j < n && is_ident_char(chars[j]) {
+            j += 1;
+        }
+        j
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let starts_number = region[i] == Region::Code
+            && chars[i].is_ascii_digit()
+            && (i == 0 || !is_ident_char(chars[i - 1]));
+        if !starts_number {
+            i += 1;
+            continue;
+        }
+        // `x.0` is a tuple field; `..2.5` is a range bound.
+        let tuple_field = i > 0 && chars[i - 1] == '.' && (i < 2 || chars[i - 2] != '.');
+        let radix = chars[i] == '0' && matches!(at(i + 1), Some('x' | 'o' | 'b'));
+        if tuple_field || radix {
+            i = word_end(i);
+            continue;
+        }
+        let mut j = digits_end(i);
+        let mut float = false;
+        // As in rustc: `2.` is a float unless a `.`, `_` or identifier follows
+        // (`0..5`, `2.max(3)`).
+        let dot_ends_number = match at(j + 1) {
+            Some(c) => c == '.' || (is_ident_char(c) && !c.is_ascii_digit()),
+            None => false,
+        };
+        if at(j) == Some('.') && !dot_ends_number {
+            float = true;
+            j = digits_end(j + 1);
+        }
+        if matches!(at(j), Some('e' | 'E')) {
+            let k = if matches!(at(j + 1), Some('+' | '-')) {
+                j + 2
+            } else {
+                j + 1
+            };
+            if matches!(at(k), Some(c) if c.is_ascii_digit() || c == '_') {
+                float = true;
+                j = digits_end(k);
+            }
+        }
+        if float {
+            out.push(i);
+        }
+        i = word_end(j);
+    }
+    out
+}
+
+/// Classifies each character as code, comment or literal.
+fn region_mask(chars: &[char]) -> Vec<Region> {
+    let n = chars.len();
+    let at = |i: usize| chars.get(i).copied();
+    let mut region = vec![Region::Code; n];
     let mut i = 0;
     while i < n {
         let c = chars[i];
-        if c == '/' && at(i + 1) == Some('/') {
+        let start = i;
+        let kind = if c == '/' && at(i + 1) == Some('/') {
             while i < n && chars[i] != '\n' {
-                code[i] = false;
                 i += 1;
             }
+            Region::Comment
         } else if c == '/' && at(i + 1) == Some('*') {
             let mut depth = 0usize;
             while i < n {
                 if chars[i] == '/' && at(i + 1) == Some('*') {
                     depth += 1;
-                    code[i] = false;
-                    code[i + 1] = false;
                     i += 2;
                 } else if chars[i] == '*' && at(i + 1) == Some('/') {
                     depth -= 1;
-                    code[i] = false;
-                    code[i + 1] = false;
                     i += 2;
                     if depth == 0 {
                         break;
                     }
                 } else {
-                    code[i] = false;
                     i += 1;
                 }
             }
+            Region::Comment
         } else if c == '"' {
             i = skip_string(chars, i + 1);
+            Region::Literal
         } else if let Some(hashes) = raw_string_hashes(chars, i) {
             i = skip_raw_string(chars, i + 1 + hashes + 1, hashes);
+            Region::Literal
         } else if c == '\'' {
             i = skip_char_or_lifetime(chars, i);
+            // A lifetime's quote alone is code; its name stays code too.
+            if i == start + 1 {
+                Region::Code
+            } else {
+                Region::Literal
+            }
         } else {
             i += 1;
+            Region::Code
+        };
+        for slot in &mut region[start..i.min(n)] {
+            *slot = kind;
         }
     }
-    code
+    region
 }
 
 /// Index just past the closing quote of a string whose body starts at `i`.
@@ -243,14 +351,17 @@ mod tests {
 
     #[test]
     fn flags_the_done_when_line() {
-        assert_eq!(tokens("let x: f64 = 0.0;"), vec![(1, 8, "f64")]);
+        assert_eq!(
+            tokens("let x: f64 = 0.0;"),
+            vec![(1, 8, "f64"), (1, 14, FLOAT_LITERAL)]
+        );
     }
 
     #[test]
     fn flags_f32_and_suffixed_literals() {
         assert_eq!(
             tokens("fn a(v: f32) {}\nconst B: u8 = 1.0f64 as u8;"),
-            vec![(1, 9, "f32"), (2, 18, "f64")]
+            vec![(1, 9, "f32"), (2, 15, FLOAT_LITERAL), (2, 18, "f64")]
         );
     }
 
@@ -271,7 +382,7 @@ mod tests {
     #[test]
     fn ignores_nested_block_comments() {
         let src = "/* outer /* inner f64 */ still comment f32 */ let y: f64 = 0.0;";
-        assert_eq!(tokens(src), vec![(1, 54, "f64")]);
+        assert_eq!(tokens(src), vec![(1, 54, "f64"), (1, 60, FLOAT_LITERAL)]);
     }
 
     #[test]
@@ -283,7 +394,7 @@ mod tests {
     #[test]
     fn comment_markers_inside_strings_are_not_comments() {
         let src = "let s = \"http://x\"; let t: f64 = 0.0;";
-        assert_eq!(tokens(src), vec![(1, 28, "f64")]);
+        assert_eq!(tokens(src), vec![(1, 28, "f64"), (1, 34, FLOAT_LITERAL)]);
     }
 
     #[test]
@@ -310,8 +421,67 @@ mod tests {
     }
 
     #[test]
-    fn identifiers_containing_the_text_are_not_flagged() {
-        assert!(tokens("let af64 = 1; let f64x = 2; let my_f32 = 3; let f640 = 4;").is_empty());
+    fn identifiers_containing_the_text_are_flagged() {
+        assert_eq!(
+            tokens("v.as_f64(); n.to_f64(); f64_from(1); let af32 = 2; let f640 = 3;"),
+            vec![
+                (1, 6, "f64"),
+                (1, 18, "f64"),
+                (1, 25, "f64"),
+                (1, 43, "f32"),
+                (1, 56, "f64"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hex_integers_containing_the_text_pass() {
+        assert!(tokens("let a = 0xf64; let b = 0xF32_u32; let c = 0x1e3;").is_empty());
+    }
+
+    #[test]
+    fn flags_decimal_and_exponent_literals() {
+        assert_eq!(
+            tokens("let a = 0.5; let b = 1e3; let c = 2.; let d = 1_000.25E-3;"),
+            vec![
+                (1, 9, FLOAT_LITERAL),
+                (1, 22, FLOAT_LITERAL),
+                (1, 35, FLOAT_LITERAL),
+                (1, 47, FLOAT_LITERAL),
+            ]
+        );
+    }
+
+    #[test]
+    fn flags_float_literals_at_line_end_and_in_ranges() {
+        assert_eq!(
+            tokens("let a = 2.\nfor x in 1.5..2.5 {}"),
+            vec![
+                (1, 9, FLOAT_LITERAL),
+                (2, 10, FLOAT_LITERAL),
+                (2, 15, FLOAT_LITERAL),
+            ]
+        );
+    }
+
+    #[test]
+    fn ranges_tuple_fields_and_integers_pass() {
+        let src = "for i in 0..5 {} let _ = 0..=9; let a = x.0; let b = t.0.1; \
+                   let c = 7u8; let d = 1_000i64; let e = 0b1010_u8; let f = 0o17; \
+                   let g = 2.max(3); let h = 1.pow(2); let k = 3._x;";
+        assert!(tokens(src).is_empty(), "{:?}", tokens(src));
+    }
+
+    #[test]
+    fn new_forms_in_comments_and_strings_pass() {
+        let src = "// 0.5 as_f64 1e3\n/* 2. to_f64 */ let s = \"0.5 as_f64 1e3 2.\"; \
+                   let r = r#\"f64_from 1.25\"#; let c = '5';";
+        assert!(tokens(src).is_empty(), "{:?}", tokens(src));
+    }
+
+    #[test]
+    fn identifiers_with_digits_are_not_literals() {
+        assert!(tokens("let x1 = a2.b3; let v = e1;").is_empty());
     }
 
     #[test]
@@ -320,7 +490,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("src/nested"))?;
         fs::write(root.join("src/lib.rs"), "// f64\npub fn ok() {}\n")?;
-        fs::write(root.join("src/nested/bad.rs"), "\nlet x: f64 = 0.0;\n")?;
+        fs::write(root.join("src/nested/bad.rs"), "\nlet x: f64 = 0;\n")?;
         fs::write(root.join("notes.md"), "f64 in markdown is fine\n")?;
         let findings = scan_dir(&root);
         fs::remove_dir_all(&root)?;

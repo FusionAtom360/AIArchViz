@@ -764,8 +764,10 @@ mod tests {
     }
 
     #[test]
-    fn writer_rejects_non_integers() {
-        for v in [json!(1.5), json!({"a": [0.25]}), json!(1e3)] {
+    fn writer_rejects_non_integers() -> Result<(), String> {
+        // Parsed from text: core source holds no float literals (T-199).
+        for text in ["1.5", r#"{"a": [0.25]}"#, "1e3"] {
+            let v: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
             assert!(
                 matches!(canonical(&v), Err(CanonicalError::NonInteger(_))),
                 "{v}"
@@ -773,6 +775,7 @@ mod tests {
         }
         assert_eq!(canonical(&json!(i64::MIN)), Ok(i64::MIN.to_string()));
         assert_eq!(canonical(&json!(u64::MAX)), Ok(u64::MAX.to_string()));
+        Ok(())
     }
 
     #[test]
