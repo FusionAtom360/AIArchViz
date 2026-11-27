@@ -15,3 +15,6 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | uuid (`v4`) | 1.29.3 | Apache-2.0 OR MIT | archviz-cli | Random ids for `new` when the request gives none (Q-49); pulls getrandom 0.4.3 (MIT OR Apache-2.0). Only the CLI enables v4; core never generates random ids. |
 | serde, serde_json, schemars | as above | as above | archviz-cli | Request and response types and their schemas in schemas/cli/. |
 | insta | 1.49.0 | Apache-2.0 | archviz-cli (dev) | Golden CLI transcripts. |
+| archviz-core | (workspace) | GPL-3.0-or-later | archviz-export | The document model and geometry the DXF writer draws. |
+| dxf | 0.6.2 | MIT | archviz-export (dev) | Independent DXF reader that checks our writer output in tests (Q-51). Test-only; its 33 transitive crates pass cargo deny. |
+| insta, proptest | as above | as above | archviz-export (dev) | DXF golden file and number-format property test. |

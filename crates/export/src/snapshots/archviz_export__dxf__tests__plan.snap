@@ -1,0 +1,6 @@
+---
+source: crates/export/src/dxf.rs
+expression: written().into_bytes()
+extension: dxf
+snapshot_kind: binary
+---

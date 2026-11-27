@@ -54,6 +54,7 @@ pub use proposal::{
 pub use roof::{RoofGeometry, RoofProblem, derive_roofs, roof_geometry};
 pub use solver::{
     Conflict, ConstraintReport, FreeClass, LayerA, Member, Outcome, Solution, SolveError, Solver,
+    reference_coordinate,
 };
 pub use space::{
     PolygonError, SpaceError, boundary_outline, check_polygon, polygon_area, space_boundary,

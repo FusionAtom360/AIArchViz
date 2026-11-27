@@ -446,6 +446,18 @@ pub(crate) fn axis_graph(doc: &Document, axis: Axis) -> Result<AxisGraph, SolveE
     })
 }
 
+/// The solved coordinate of `reference` on `axis` (for exporters, which
+/// draw dimensions between references).
+pub fn reference_coordinate(
+    doc: &Document,
+    reference: &Reference,
+    axis: Axis,
+) -> Result<Length, SolveError> {
+    let (var, constant) = resolve_reference(doc, reference, axis)?;
+    let graph = axis_graph(doc, axis)?;
+    to_length(graph.values.get(var).copied().unwrap_or(0) + constant)
+}
+
 /// The variable and constant that give `reference`'s coordinate on `axis`.
 pub(crate) fn resolve_reference(
     doc: &Document,

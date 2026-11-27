@@ -332,3 +332,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) codes and exit statuses: BAD_REQUEST 2, NOT_A_PROJECT 3, PROJECT_EXISTS 4, LOCKED 5, CORRUPT_PROJECT 6, COMMAND_FAILED 7, STALE 8, ALTERED 9, BLOCKED 10, NOTHING_TO_UNDO 11, NOT_FOUND 12, IO 13; every response's `error.code` is one of these and never changes meaning once released; (b) other names or numbers you give.
 - Recommendation: (a).
 - Answer: (a) the listed codes (owner, 2026-11-26).
+
+## Q-51: DXF version, writer and independent reader (T-118, status: answered)
+- Context: 11.1 asks for a version AutoCAD 2018 reads, R2013 or older, fixed by S-7, with INSUNITS 1, LUNITS 4 and LUPREC 4. INSUNITS exists only from R2000 (AC1015) on, and R2000 and later need the full file structure (tables, block records, handles, an objects dictionary) to open without a repair prompt. The Done when needs "an independent DXF reader" to parse the output.
+- Options: (a) write R2000 (AC1015) with our own writer in crates/export (no runtime dependency): the oldest version with INSUNITS, read by AutoCAD 2018 and by most other readers; check it in tests with the `dxf` crate (0.6.2, MIT, test-only, licenses pass cargo deny) as the independent reader; record the choice in docs/DECISIONS.md as a draft for G-3 and S-7 to confirm; (b) write AC1027 (R2013) instead; (c) use the `dxf` crate to write as well, with no truly independent reader in tests.
+- Recommendation: (a). Our writer controls every byte, so the golden file is meaningful, and the reader that checks it shares no code with it.
+- Answer: (a) R2000 with our own writer; dxf crate as test-only reader (owner, 2026-11-26).
+
+## Q-52: DIMENSION entities or the fallback (T-118, status: answered)
+- Context: 11.1 asks for DIMENSION entities for Driving constraints, falling back to "dimension lines, extension lines and text on a DIMENSIONS layer" if the writer cannot produce rendering geometry AutoCAD 2018 accepts reliably (S-7). DIMENSION entities need anonymous blocks with their own geometry; a mistake shows up only in AutoCAD.
+- Options: (a) v1 writes the fallback for every driving Distance constraint: a dimension line, two extension lines and the value in feet-inches as text, all on DIMENSIONS; X dimensions are stacked above the plan and Y dimensions to its right, 24 in out and 12 in apart, in constraint id order; true DIMENSION entities follow only if G-3 shows the fallback is not enough; (b) write DIMENSION entities now and keep the fallback for later.
+- Recommendation: (a). It is certain to open, it is what 11.1 allows, and G-3 then tells us whether real DIMENSION entities are worth the risk.
+- Answer: (a) the fallback first (owner, 2026-11-26).
+
+## Q-53: Layers, content and number format (T-118, status: answered)
+- Context: T-118 lists wall footprints, openings, slab outlines and labeled equipment footprints on layers per entity class, coordinates in decimal inches with at least six decimals, and coordinates that "round-trip to the nanometer". Six decimals of an inch are 25.4 nm, so they cannot round-trip to the nanometer.
+- Options: (a) layers WALLS (new), WALLS-EXISTING, WALLS-DEMOLISHED (by function), OPENINGS (each opening's void through its wall, as a closed outline), SLABS, EQUIPMENT (every occurrence footprint), EQUIPMENT-LABELS (each label as text at the footprint center, 6 in high) and DIMENSIONS; every outline a closed LWPOLYLINE; numbers written with 8 decimals of an inch (0.254 nm steps, so every stored nanometer reads back exactly), computed in integer arithmetic; layer names in this plain form rather than an AIA standard; (b) AIA-style names (A-WALL, A-DOOR, A-GLAZ, A-FLOR, A-EQPM, A-EQPM-IDEN, A-ANNO-DIMS); (c) 6 decimals only.
+- Recommendation: (a), with layer names easy to change if the client's own drawings use a standard.
+- Answer: (a) plain layer names, 8 decimals (owner, 2026-11-26).

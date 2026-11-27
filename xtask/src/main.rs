@@ -85,27 +85,32 @@ fn golden() -> Result<(), String> {
         }
         Ok(())
     })?;
-    step("insta snapshots (archviz-core, archviz-cli)", || {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let status = Command::new(cargo)
-            .args([
-                "test",
-                "-p",
-                "archviz-core",
-                "-p",
-                "archviz-cli",
-                "--locked",
-            ])
-            .env("INSTA_UPDATE", "always")
-            .current_dir(&root)
-            .status()
-            .map_err(|e| format!("could not run cargo test: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("cargo test exited with {status}"))
-        }
-    })?;
+    step(
+        "insta snapshots (archviz-core, archviz-cli, archviz-export)",
+        || {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            let status = Command::new(cargo)
+                .args([
+                    "test",
+                    "-p",
+                    "archviz-core",
+                    "-p",
+                    "archviz-cli",
+                    "-p",
+                    "archviz-export",
+                    "--locked",
+                ])
+                .env("INSTA_UPDATE", "always")
+                .current_dir(&root)
+                .status()
+                .map_err(|e| format!("could not run cargo test: {e}"))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("cargo test exited with {status}"))
+            }
+        },
+    )?;
     println!("xtask golden: done; review `git diff` before committing");
     Ok(())
 }
