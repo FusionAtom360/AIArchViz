@@ -30,6 +30,11 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Decision: the Khronos glTF validator is not installed on the build machine or in CI. For T-119 it was installed with npm (gltf-validator 2.0.0-dev.3.10, Apache-2.0, published by The Khronos Group) into a scratch folder outside the repository, not as a crate dependency (Q-56), and run on the golden GLB crates/export/src/gltf/snapshots/archviz_export__gltf__tests__golden_l_room_glb.snap.glb (SHA-256 0ebc5c07a267ea7a4a633317ac9aeb26716a33b1f1ed0f5f5b3db05e9f3718a4). CI checks structure on every push with the `gltf` crate as a test-only reader, plus closed-solid volume tests.
 - Result: 0 errors, 0 warnings, 0 infos, 0 hints; 12 draw calls, 492 vertices, 252 triangles.
 - Rationale: answers T-119's Done when with the reference validator without adding Node to the Rust build.
+- Re-run (2026-11-27, REVIEW-1 M-3, Q-74): the same validator install (2.0.0-dev.3.10), on the format after T-122b (welded vertices, no normals, cell-grid wall solids) and T-195 (root `extras.proposed_items`), with `cargo xtask slice` run at `274bbbe`. Every file: 0 errors, 0 warnings, 0 infos, 0 hints.
+  - Golden GLB, SHA-256 f2883ce95d226638491289e35e7ce0922bad0430603d5589487859223d9d82db: 12 draw calls, 196 vertices, 348 triangles.
+  - Slice shop.glb, SHA-256 efa7f6ec0c03fad5358143f755e575d70aef8358f6c284a4c6a9079dbb832c95: 36 draw calls, 464 vertices, 796 triangles.
+  - Slice l-room.glb, SHA-256 c6002b7a72fff83bc052ce0d9a7fb05ce92d72e47cb85d1ff024a910ba0951c0: 12 draw calls, 196 vertices, 348 triangles.
+  - All 48 per-element GLBs of the shop and L-room Scene Packages.
 - Status: approved (owner, Q-56, 2026-11-26)
 
 ## DEC-3: Creation commands beyond the 8.2 set

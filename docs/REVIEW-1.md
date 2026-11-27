@@ -108,7 +108,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Also:** the workload is "500 walls / 1,500 constraints". It is not 500 mixed elements with openings and occurrences, which the solver now also handles (T-108, T-111).
 
 ### M-3: The Khronos validator result is stale
-- **Status: open**, an owner step (Q-74): re-run the Khronos glTF Validator on the current golden and the slice GLBs and record the results in DEC-2, in the same sitting as a repeat of G-3 on the slice shop.dxf.
+- **Status: closed** (2026-11-27, Q-74). The Khronos glTF Validator 2.0.0-dev.3.10 reports 0 errors, warnings, infos and hints on the current golden (`f2883ce9…`), the slice shop.glb and l-room.glb and all 48 Scene Package GLBs; recorded in DEC-2.
 - DEC-2 validated the golden GLB with SHA-256 `0ebc5c07…`.
 - The current golden, `crates/export/src/gltf/snapshots/archviz_export__gltf__tests__golden_l_room_glb.snap.glb`, has SHA-256 `f2883ce9…`.
 - T-122b changed the mesh format: welded vertices, no normals, and walls as cell-grid solids. Nobody has re-run the validator on the format that G-4 will import.
