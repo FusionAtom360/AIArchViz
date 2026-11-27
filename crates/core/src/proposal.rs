@@ -24,6 +24,7 @@ use crate::defaults::{MIN_JAMB_DISTANCE, opening_size};
 use crate::document::{Document, Function, Placement, Source, Sourced};
 use crate::edit::{Candidate, MoveError, MoveOutcome, request_for, resolve_move};
 use crate::geometry::{GeometryError, update_joins};
+use crate::grid::check_user_grid;
 use crate::identity::{PROJECT_NAMESPACE, Uuid};
 use crate::length::Length;
 use crate::log::{Event, History, LogEntry, LogError};
@@ -325,6 +326,10 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
             let mut resolved = Vec::new();
             let mut next = base.clone();
             for (index, c) in commands.iter().enumerate() {
+                // Only submitted commands: what defaults and move resolution
+                // generate below is not user-stated (5.3, T-190).
+                check_user_grid(&c.action)
+                    .map_err(|error| ProposeError::Command { index, error })?;
                 let Some(request) = request_for(&next, &c.action) else {
                     let r = resolve(&next, c);
                     next =
@@ -886,6 +891,29 @@ mod tests {
         // Deterministic: the same action proposes the same proposal.
         assert_eq!(propose(&history, &action)?, a);
         Ok(())
+    }
+
+    /// T-190: an off-grid user-stated value fails the proposal with the
+    /// command's index and the nearest grid value (5.3).
+    #[test]
+    fn an_off_grid_user_stated_value_is_rejected() {
+        let history = History::new(genesis());
+        let mut storey = set_storey(None, "Ground");
+        if let Action::SetStorey(s) = &mut storey {
+            s.floor_to_floor.value = Length::from_nanometers(3_048_000_001);
+        }
+        let action = commands(vec![cmd(1, create_node(0, 0)), cmd(2, storey)]);
+        assert_eq!(
+            propose(&history, &action),
+            Err(ProposeError::Command {
+                index: 1,
+                error: CommandError::OffGrid {
+                    argument: "/args/floor_to_floor".into(),
+                    value: Length::from_nanometers(3_048_000_001),
+                    nearest: Length::from_nanometers(3_048_000_000),
+                },
+            })
+        );
     }
 
     #[test]

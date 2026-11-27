@@ -273,3 +273,45 @@ fn fixtures_replay_to_identical_bytes() {
         let _ = std::fs::remove_dir_all(&b);
     }
 }
+
+/// T-190 (spec 5.3, REVIEW-1 C-1): a user-stated constraint 1 nm off the
+/// 1/16 in grid is rejected with the nearest grid value, and nothing commits.
+#[test]
+fn an_off_grid_user_stated_constraint_is_rejected() {
+    let on = "\"value\":6096000000";
+    let text = script("l-room");
+    let at = text
+        .lines()
+        .position(|l| l.contains("\"kind\":\"add_constraint\"") && l.contains(on))
+        .unwrap_or_else(|| panic!("no add_constraint with {on}"));
+    let dir = std::env::temp_dir().join(format!("archviz-fixture-offgrid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (i, line) in text.lines().enumerate() {
+        let (sub, request) = line.split_once(' ').unwrap_or((line, ""));
+        if i < at {
+            let (out, status) = archviz(sub, &dir, request);
+            assert_eq!(status, 0, "line {}: {out}", i + 1);
+            continue;
+        }
+        assert!(request.contains("\"source\":\"user_stated\""), "{request}");
+        let log = std::fs::read(dir.join("log.jsonl")).unwrap_or_default();
+        let (out, status) = archviz(sub, &dir, &request.replacen(on, "\"value\":6096000001", 1));
+        assert_ne!(status, 0, "{out}");
+        assert_eq!(out["ok"], json!(false), "{out}");
+        let message = out["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("/args/kind/value"), "{message}");
+        assert!(
+            message.contains("nearest grid value is 20'-0\""),
+            "{message}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("log.jsonl")).unwrap_or_default(),
+            log
+        );
+        // The same line on the grid still commits.
+        let (out, status) = archviz(sub, &dir, request);
+        assert_eq!(status, 0, "{out}");
+        break;
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -8,6 +8,7 @@ mod defaults;
 mod document;
 mod edit;
 mod geometry;
+mod grid;
 mod identity;
 mod items;
 mod length;

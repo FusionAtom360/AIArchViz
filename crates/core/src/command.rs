@@ -355,6 +355,13 @@ pub enum CommandError {
     NotADimension(Uuid),
     /// The arguments contradict each other or a rule of the model (Q-66).
     InvalidArguments(String),
+    /// A user-stated length is off the 1/16 in grid (5.3). `argument` is its
+    /// JSON pointer in the command; `nearest` is echoed for confirmation.
+    OffGrid {
+        argument: String,
+        value: Length,
+        nearest: Length,
+    },
 }
 
 impl fmt::Display for CommandError {
@@ -369,6 +376,16 @@ impl fmt::Display for CommandError {
             }
             CommandError::NotADimension(id) => write!(f, "{id} has no settable dimension"),
             CommandError::InvalidArguments(text) => write!(f, "invalid arguments: {text}"),
+            CommandError::OffGrid {
+                argument,
+                value,
+                nearest,
+            } => write!(
+                f,
+                "{argument} is {} nm, finer than 1/16 in; nearest grid value is {}",
+                value.nanometers(),
+                crate::units::format_length(*nearest)
+            ),
             CommandError::InvalidOption { slot, option } => {
                 write!(f, "{option} is not an option of variant slot {slot}")
             }

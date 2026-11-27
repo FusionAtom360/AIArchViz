@@ -185,7 +185,7 @@ impl Ratio {
 }
 
 /// `n / d` rounded half to even; `d` must be positive.
-fn round_half_even(n: i128, d: i128) -> i128 {
+pub(crate) fn round_half_even(n: i128, d: i128) -> i128 {
     let q = n / d;
     let r = n % d;
     // |r| < d, so 2|r| fits in u128.
