@@ -345,6 +345,8 @@ pub enum JoinType {
     Isolated,
     /// One wall ends here, square.
     FreeEnd,
+    /// Two collinear walls meet end to end, square (Q-19).
+    Straight,
     /// Two walls, mitered.
     L,
     /// Three walls; the lowest join_priority runs through.

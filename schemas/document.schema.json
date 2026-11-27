@@ -678,6 +678,11 @@
           "type": "string"
         },
         {
+          "const": "straight",
+          "description": "Two collinear walls meet end to end, square (Q-19).",
+          "type": "string"
+        },
+        {
           "const": "l",
           "description": "Two walls, mitered.",
           "type": "string"

@@ -3,6 +3,7 @@
 mod canonical;
 mod command;
 mod document;
+mod geometry;
 mod identity;
 mod length;
 mod log;
@@ -15,6 +16,7 @@ pub use command::{
     SetVariantSelection, apply,
 };
 pub use document::*;
+pub use geometry::{GeometryError, WallGeometry, node_joins, update_joins, wall_geometry};
 pub use identity::{Label, LabelAllocator, LabelError, PROJECT_NAMESPACE, Uuid};
 pub use length::{Length, LengthError};
 pub use log::{Event, History, LogEntry, LogError, Snapshot, log_from_jsonl, log_to_jsonl};

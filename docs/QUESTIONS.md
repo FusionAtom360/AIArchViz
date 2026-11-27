@@ -130,3 +130,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) T-106 solves Node, WallFace, WallCenter and Datum references; OpeningEdge, ItemEdge and ItemCenter return UnsupportedReference until T-108 and T-111 extend the solver; an underconstrained class keeps its translation from the stored position of its lowest-id member, so a provisional model always exists; WallFace boundary indexes count from the named side's finish face inward (0 = that side's face); Reference-status constraints report their computed value and residual when both ends are in one class; (b) all seven kinds now, with item and opening geometry defined here.
 - Recommendation: (a). Each later task adds its own reference kinds with its own geometry and tests.
 - Answer: (a) as listed (owner, 2026-11-26).
+
+## Q-17: Mitered L joins in exact integer arithmetic (T-107, status: answered)
+- Context: 6.1 says an L join is mitered; T-107 asks for exact integer rectilinear polygon arithmetic. A miter cuts each wall end along the line from the inner-face corner to the outer-face corner. Those two corners are always integer points, so wall footprints stay exact (with one diagonal edge each), but a layer boundary inside the wall crosses that line at a non-integer point whenever the two walls have different thicknesses.
+- Options: (a) miter as specified: footprints exact; a layer boundary point on the miter line is rounded half to even to the nanometer when it is not exact (at most 0.5 nm, only between unequal walls); (b) deviate (DECISIONS entry): treat L like T, the lower join_priority wall runs through and the other butts, so every polygon is rectilinear and exact; (c) rational coordinates for layer polygons.
+- Recommendation: (a). It follows the spec, the footprints and every face are exact, and the only rounding is inside the wall at a scale far below anything drawn or built.
+- Answer: (a) miter; interior layer points on the miter rounded half to even (owner, 2026-11-26).
+
+## Q-18: Which wall "runs through" at T and X joins (T-107, status: answered)
+- Context: 6.1: "at three or more, the wall with the lowest join_priority runs through and others butt". Walls meeting at a node from opposite sides form a run. At a T the stem is a run of one; it can have the lowest priority.
+- Options: (a) the run containing the lowest-priority wall (ties by lowest wall id) runs through. A run of two collinear walls meets square at the node and is continuous; a run of one (a T stem) extends through the junction to the far face of the crossing walls. Every other wall butts, ending at the nearest face of the through run (with collinear walls of different thickness, the face that reaches farthest toward it); (b) at a T the collinear pair always runs through, and join_priority only decides between the two pairs of an X.
+- Recommendation: (a). It is the rule as written and is fully deterministic.
+- Answer: (a) the run with the lowest-priority wall runs through (owner, 2026-11-26).
+
+## Q-19: Other node cases and where footprints live (T-107, status: answered)
+- Context: 6.1 does not cover two collinear walls meeting end to end, or two walls leaving a node in the same direction. Q-7 stores derived node join types, but footprints were not listed.
+- Options: (a) two collinear walls at a node meet with square ends at the node (a new join type `straight`, schema change); two walls leaving a node in the same direction, or more than four walls, are an error naming the node; footprints and layer polygons are computed on demand by a pure function, never stored; join types are stored on nodes; polygons are listed counterclockwise from the vertex with the lowest x, then lowest y; layers are listed left to right; (b) the same, but footprints stored in the document.
+- Recommendation: (a). Footprints are cheap to recompute from nodes and layer sets, and storing them would put large derived data in every diff.
+- Answer: (a) as listed: straight join type, errors, polygons computed on demand (owner, 2026-11-26).
