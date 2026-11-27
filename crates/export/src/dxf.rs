@@ -11,8 +11,9 @@
 //! - each opening's void through its wall on OPENINGS;
 //! - slab outlines on SLABS;
 //! - occurrence footprints on EQUIPMENT, labels as text on EQUIPMENT-LABELS;
-//! - each driving Distance constraint as a dimension line, two extension
-//!   lines and its value in feet-inches on DIMENSIONS (the 11.1 fallback);
+//! - each driving Distance constraint with a non-zero value as a dimension
+//!   line, two extension lines and its value in feet-inches on DIMENSIONS
+//!   (the 11.1 fallback); a zero distance is an anchor with no span (T-196);
 //! - each Point datum, the fiducials (spec 5.4, S-3), as a POINT on DATUMS
 //!   with its name as left-aligned text inserted at the same point;
 //! - for a provisional model only, its Proposed items (spec 7.4) as
@@ -321,7 +322,8 @@ fn items(doc: &Document) -> Result<Vec<Item>, DxfError> {
         else {
             continue;
         };
-        if c.status != ConstraintStatus::Driving {
+        // A zero distance fixes a position (an anchor) and has no span.
+        if c.status != ConstraintStatus::Driving || value.nanometers() == 0 {
             continue;
         }
         let pa = reference_coordinate(doc, a, *axis)
@@ -1301,6 +1303,60 @@ mod tests {
             storey.default_ceiling_height.source = Source::UserStated;
         }
         assert_eq!(write_dxf(&supplied).ok(), Some(written()));
+    }
+
+    /// T-196 Done when: a zero driving Distance, such as the anchors that pin
+    /// a plan to its origin datum, draws no dimension; every other driving
+    /// Distance still draws one.
+    #[test]
+    fn zero_distances_draw_no_dimension() {
+        let mut doc = plan();
+        doc.datums.insert(
+            uid(4, 0),
+            Datum {
+                name: "Origin".into(),
+                geometry: DatumGeometry::Point {
+                    x: len(0),
+                    y: len(0),
+                },
+            },
+        );
+        for (n, axis) in [(10u8, Axis::X), (11, Axis::Y)] {
+            doc.constraints.insert(
+                uid(3, n),
+                Constraint {
+                    kind: ConstraintKind::Distance {
+                        a: Reference::Datum { datum: uid(4, 0) },
+                        b: Reference::Node { node: uid(1, 0) },
+                        axis,
+                        value: len(0),
+                        tolerance: None,
+                    },
+                    status: ConstraintStatus::Driving,
+                    source: Source::UserStated,
+                    provenance: None,
+                },
+            );
+        }
+        let doc = derive(doc)
+            .map(|d| d.document)
+            .unwrap_or_else(|e| panic!("derive: {e}"));
+        let drawing = read(&write_dxf(&doc).unwrap_or_else(|e| panic!("{e}")));
+        let (mut texts, mut lines) = (Vec::new(), Vec::new());
+        for e in drawing
+            .entities()
+            .filter(|e| e.common.layer == "DIMENSIONS")
+        {
+            match &e.specific {
+                ::dxf::entities::EntityType::Text(t) => texts.push(t.value.clone()),
+                ::dxf::entities::EntityType::Line(l) => lines.push(l.clone()),
+                _ => {}
+            }
+        }
+        texts.sort();
+        assert_eq!(texts, ["12'-0\"", "20'-0\""]);
+        assert_eq!(lines.len(), 2 * 3);
+        assert!(lines.iter().all(|l| l.p1 != l.p2));
     }
 
     #[test]

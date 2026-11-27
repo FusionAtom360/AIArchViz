@@ -320,7 +320,7 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 **T-196 No zero-length dimensions in the DXF.** Spec 11.1; T-118. Owner report 2026-11-27: the L-room and shop DXFs each show two 0'-0" dimensions. Depends on T-195.
 
 - Build: `write_dxf` draws no dimension for a driving Distance constraint whose value is zero, such as the anchors that pin a plan to its origin datum on x and y; such a constraint fixes a position and has no span to dimension. The constraint itself is unchanged, and the remaining dimensions stack in order as before without gaps.
-- Done when: a test on the derived L-room shows no 0'-0" text and no zero-length line on DIMENSIONS, with one dimension per non-zero driving Distance constraint; the DXF golden is unchanged.
+- Done when: a test on a derived plan anchored to its origin datum by zero distances on x and y shows no 0'-0" text and no zero-length line on DIMENSIONS, with one dimension per non-zero driving Distance constraint; the DXF golden is unchanged.
 
 ## 7. Phase 2: App
 
