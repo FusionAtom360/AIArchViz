@@ -137,6 +137,10 @@ pub struct History {
     base_version: u64,
     undo: Vec<State>,
     redo: Vec<State>,
+    /// The sequence of the commit each `undo` and `redo` entry would revert
+    /// or reapply, in the same order (for the echo text, Q-76).
+    undo_commits: Vec<u64>,
+    redo_commits: Vec<u64>,
     keys: BTreeMap<Uuid, u64>,
 }
 
@@ -214,6 +218,8 @@ impl History {
             base_version: snapshot.version,
             undo: Vec::new(),
             redo: Vec::new(),
+            undo_commits: Vec::new(),
+            redo_commits: Vec::new(),
             keys: BTreeMap::new(),
         }
     }
@@ -242,6 +248,16 @@ impl History {
     /// The document a Redo would restore, if any.
     pub fn peek_redo(&self) -> Option<&Document> {
         self.redo.last().map(|s| &s.document)
+    }
+
+    /// The sequence of the commit an Undo would revert, if any.
+    pub fn peek_undo_commit(&self) -> Option<u64> {
+        self.undo_commits.last().copied()
+    }
+
+    /// The sequence of the commit a Redo would reapply, if any.
+    pub fn peek_redo_commit(&self) -> Option<u64> {
+        self.redo_commits.last().copied()
     }
 
     /// The current state as a snapshot.
@@ -291,6 +307,8 @@ impl History {
                 });
                 self.undo.push(prior);
                 self.redo.clear();
+                self.undo_commits.push(entry.sequence);
+                self.redo_commits.clear();
                 self.keys.append(&mut seen);
             }
             Event::Undo => {
@@ -303,11 +321,17 @@ impl History {
                 })?;
                 let current = self.replace(prior);
                 self.redo.push(current);
+                if let Some(c) = self.undo_commits.pop() {
+                    self.redo_commits.push(c);
+                }
             }
             Event::Redo => {
                 let next = self.redo.pop().ok_or(LogError::NothingToRedo)?;
                 let current = self.replace(next);
                 self.undo.push(current);
+                if let Some(c) = self.redo_commits.pop() {
+                    self.undo_commits.push(c);
+                }
             }
         }
         self.version = entry.sequence;

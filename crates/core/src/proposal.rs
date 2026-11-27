@@ -191,6 +191,10 @@ pub struct Proposal {
     /// The action with every value explicit: moves become SetConstraintValue
     /// commands (Q-39).
     pub resolved: ProposedAction,
+    /// The resolved commands in canonical plain language, one entry per
+    /// submitted command; a move reads as the move, the dimensions it sets
+    /// and what moves with it (9.4, Q-76). The user confirms this text.
+    pub echo: Vec<String>,
     /// Entities that move as a consequence of a move command (8.7).
     pub consequences: Vec<Uuid>,
     /// The resulting model rests on Proposed values (7.4, Q-41).
@@ -337,6 +341,7 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
     let mut ambiguities = Vec::new();
     let mut consequences = BTreeSet::new();
     let mut obstructions = Vec::new();
+    let mut echo = Vec::new();
     let (resolved, after, solution, violations) = match action {
         ProposedAction::Commands { commands } => {
             let mut resolved = Vec::new();
@@ -348,17 +353,20 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
                     .map_err(|error| ProposeError::Command { index, error })?;
                 let Some(request) = request_for(&next, &c.action) else {
                     let r = resolve(&next, c);
-                    next =
+                    let applied =
                         apply(&next, &r).map_err(|error| ProposeError::Command { index, error })?;
+                    echo.push(crate::echo::render(&next, &applied, &r));
+                    next = applied;
                     resolved.push(r);
                     continue;
                 };
                 let request = request.map_err(|error| ProposeError::Move { index, error })?;
                 // Resolve against the solved state so far (8.7).
                 let current = derive(next.clone()).map_err(ProposeError::Derive)?.document;
-                let edits = match resolve_move(&current, &request)
-                    .map_err(|error| ProposeError::Move { index, error })?
-                {
+                let outcome = resolve_move(&current, &request)
+                    .map_err(|error| ProposeError::Move { index, error })?;
+                echo.push(crate::echo::move_entry(&current, c, &outcome));
+                let edits = match outcome {
                     MoveOutcome::Edits {
                         edits,
                         moved,
@@ -413,8 +421,14 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
         }
         ProposedAction::Undo | ProposedAction::Redo => {
             let target = match action {
-                ProposedAction::Undo => history.peek_undo().ok_or(ProposeError::NothingToUndo)?,
-                _ => history.peek_redo().ok_or(ProposeError::NothingToRedo)?,
+                ProposedAction::Undo => {
+                    echo.push(crate::echo::undo_redo("Undo", history.peek_undo_commit()));
+                    history.peek_undo().ok_or(ProposeError::NothingToUndo)?
+                }
+                _ => {
+                    echo.push(crate::echo::undo_redo("Redo", history.peek_redo_commit()));
+                    history.peek_redo().ok_or(ProposeError::NothingToRedo)?
+                }
             };
             // Undo and redo restore a stored state exactly; report on it as is.
             let solution = LayerA::default()
@@ -434,6 +448,7 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
         base_version: history.version(),
         action: action.clone(),
         resolved,
+        echo,
         consequences: consequences.into_iter().collect(),
         provisional: crate::params::is_provisional(&after),
         diff,
@@ -873,6 +888,62 @@ mod tests {
                 absorb,
             }),
         )])
+    }
+
+    /// T-199e, Q-76 (b): a move echoes as the move, the dimensions it sets
+    /// and what moves with it; other commands one sentence each.
+    #[test]
+    fn a_proposal_echoes_each_command_in_plain_language() -> Result<(), ProposeError> {
+        let (doc, [_, b, _], _, _) = crate::echo::tests::labeled_chain();
+        let history = History::new(doc);
+        let mut action = move_b(None, vec![], b);
+        if let ProposedAction::Commands { commands } = &mut action {
+            commands.push(cmd(41, create_node(0, 0)));
+        }
+        let p = propose(&history, &action)?;
+        assert_eq!(
+            p.echo,
+            vec![
+                r#"Move W-002 center 1'-0" toward +X: set the distance from W-001 center to W-002 center along X from 8'-0" to 9'-0"; W-003, the window in W-003 at 2'-0" from node at (24'-0", 0'-0") move with it"#,
+                r#"Create a node at (0'-0", 0'-0")"#,
+            ]
+        );
+        Ok(())
+    }
+
+    /// Done when: the same proposal always renders the same text.
+    #[test]
+    fn the_same_proposal_renders_the_same_text() -> Result<(), ProposeError> {
+        let (doc, [_, b, _], [_, _, c3], _) = crate::echo::tests::labeled_chain();
+        let first = History::new(doc.clone());
+        let second = History::new(doc);
+        for action in [move_b(None, vec![], b), move_b(None, vec![c3], b)] {
+            let p = propose(&first, &action)?;
+            assert_eq!(p.echo.len(), 1);
+            assert_eq!(propose(&first, &action)?.echo, p.echo);
+            assert_eq!(propose(&second, &action)?.echo, p.echo);
+        }
+        Ok(())
+    }
+
+    /// Undo and redo name the commit they act on.
+    #[test]
+    fn undo_and_redo_echo_the_commit_number() -> Result<(), CommitError> {
+        let mut history = History::new(genesis());
+        for (n, unit) in [(1, ProjectUnit::Feet), (2, ProjectUnit::Inches)] {
+            let set = Action::SetProjectUnits(SetProjectUnits { default_unit: unit });
+            let p =
+                propose(&history, &commands(vec![cmd(n, set)])).map_err(CommitError::Propose)?;
+            commit(&mut history, &p, i64::from(n), "user")?;
+        }
+        let undo = propose(&history, &ProposedAction::Undo).map_err(CommitError::Propose)?;
+        assert_eq!(undo.echo, vec!["Undo commit 2"]);
+        commit(&mut history, &undo, 3, "user")?;
+        let undo = propose(&history, &ProposedAction::Undo).map_err(CommitError::Propose)?;
+        assert_eq!(undo.echo, vec!["Undo commit 1"]);
+        let redo = propose(&history, &ProposedAction::Redo).map_err(CommitError::Propose)?;
+        assert_eq!(redo.echo, vec!["Redo commit 2"]);
+        Ok(())
     }
 
     #[test]

@@ -3016,6 +3016,13 @@
           },
           "type": "array"
         },
+        "echo": {
+          "description": "The resolved commands in canonical plain language, one entry per\nsubmitted command; a move reads as the move, the dimensions it sets\nand what moves with it (9.4, Q-76). The user confirms this text.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "flags": {
           "items": {
             "$ref": "#/$defs/Flag"
@@ -3045,6 +3052,7 @@
         "base_version",
         "action",
         "resolved",
+        "echo",
         "consequences",
         "provisional",
         "diff",

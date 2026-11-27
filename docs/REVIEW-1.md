@@ -161,7 +161,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Impact:** a message containing `"` or `\` gives invalid JSON on stdout, which breaks C2's "JSON out" contract.
 
 ### M-10: The echo rule (spec 9.4) is not implemented in proposals
-- **Status: open**, echo text planned as T-199e; the CLI confirmation step is closed by DEC-10 (Q-74, 2026-11-27).
+- **Status: closed** by T-199e (2026-11-27): `Proposal.echo` renders each submitted command in canonical plain language (Q-76), covered by `one_rendering_per_command_kind`, `a_proposal_echoes_each_command_in_plain_language` and `the_same_proposal_renders_the_same_text`; the CLI confirmation step is closed by DEC-10 (Q-74, 2026-11-27).
 - **Where:** `crates/core/src/proposal.rs:169` (`Proposal`).
 - **Spec:** T-112 cites 9.4: "Before commit, the System renders the resolved command in canonical plain language".
 - **What exists:** `Proposal` has resolved commands and display-unit diffs, but no rendered echo text.

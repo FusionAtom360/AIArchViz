@@ -18,6 +18,7 @@ mod command;
 mod create;
 mod defaults;
 mod document;
+mod echo;
 mod edit;
 mod geometry;
 mod grid;
