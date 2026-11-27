@@ -522,3 +522,24 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   - (c) Both (a) and (b).
 - Recommendation: (a). It keeps the Q-47 layout and cost, matches what "committed" already means (the answer comes only after the newline is flushed), and recovers projects torn before the fix.
 - Answer: (a) (owner, 2026-11-27). T-193 added to docs/PLAN.md.
+
+## Q-74: How to triage REVIEW-1 M-1 to M-10 and close Phase 1 (status: open)
+- Context: PLAN section 11 says each review finding is either accepted as a task (T-190 and up) or recorded in docs/DECISIONS.md as not needed, and `phase-N` is tagged when the findings are closed. C-1, C-2 and H-1 to H-5 are closed (T-190 to T-195; T-196 fixed zero-length DXF dimensions from an owner report). M-1 to M-10 have not been triaged. `phase-1` was tagged at `737f67c` when C-2 closed (Q-72), before T-192 to T-196. Two later changes also touch outputs a gate checked by hand: T-195 adds a PROPOSED layer to provisional DXFs (G-3 opened the DXF in AutoCAD 2018), and T-195 and T-196 change the L-room slice files G-4 imported (only GLB root `extras` and DXF content, not geometry).
+- Proposed triage, item by item:
+  - M-1 (13.2 inverse deltas): accept. Core has no inverse delta at all (`grep -i inverse crates/core/src` is empty), so the task builds the inverse of MoveWall, MoveOpening, MoveOccurrence and SetConstraintValue and a proptest that applying it restores a byte-identical document.
+  - M-2 (T-106 timing never enforced): accept. `cargo xtask check` runs the timing test in release, on a mixed workload of 500 walls, openings and occurrences with 1,500 constraints, under 50 ms.
+  - M-3 (stale Khronos validator result): accept as an owner step, not a task. Re-run the Khronos glTF Validator on the current golden and on the slice shop.glb and l-room.glb, and add the hashes and results to DEC-2.
+  - M-4 (float lint gaps): accept. The lint also flags decimal literals and any identifier containing `f32` or `f64` in core.
+  - M-5 (no tooling for "no panics" and "never wraps"): accept, scoped. `overflow-checks = true` in the release profile, and core denies `clippy::unwrap_used`, `expect_used`, `panic` and `indexing_slicing` outside tests, rewriting the indexed paths the review lists. `arithmetic_side_effects` is left out: it would flag every i128 operation that is already bounded, and checked arithmetic at the boundaries (H-1, T-101) is the rule.
+  - M-6 (6.7 baseline value): accept. ExistingConditionEdit carries the baseline value (first committed state) for each changed field, with a test for an edit made after an earlier edit.
+  - M-7 (no migrations): decision, not a task. DEC entry: schema_version stays 1 and the parser rejects others; the migration hook and its test come with the first schema change, which must add them before the version bumps.
+  - M-8 (unbounded CLI output): decision, defer to Phase 3. DEC entry: the 8 KB bound and pagination of 9.8 are built with the tool surface (T-301 to T-308), which the CLI then shares; until then the CLI is a development interface.
+  - M-9 (fallback error built by string formatting): accept. Small fix with a test that a message containing `"` and `\` gives valid JSON.
+  - M-10 (9.4 echo rule): split. Accept the echo text: Proposal carries the resolved commands rendered in canonical plain language, with a table test. Decision for the confirmation step: the app confirms in Phase 2 (T-2xx) and `apply` stays a one-call commit for scripts and fixtures; an interactive CLI prompt is not built (DEC entry).
+- Options for the tag:
+  - (a) When the accepted tasks are done, move `phase-1` to that commit (delete and re-push the tag; anyone who fetched the old tag keeps it until they fetch with --force).
+  - (b) Keep `phase-1` at `737f67c` and tag `phase-1-review` at the commit that closes the last finding.
+  - (c) Keep `phase-1` where it is and record in DECISIONS.md that the medium findings are closed in Phase 2's first tasks.
+- Options for the gates: (i) the owner re-opens the slice shop.dxf in AutoCAD 2018 (repeat of G-3, no repair prompt, PROPOSED layer readable) together with M-3; (ii) no repeat, since T-195 adds only TEXT entities and a layer of the kinds G-3 already accepted.
+- Recommendation: the triage as proposed (T-197 to T-203 for M-1, M-2, M-4, M-5, M-6, M-9 and the M-10 echo; DEC entries for M-7, M-8 and the M-10 prompt), tag option (b), which closes the findings as section 11 asks without rewriting a published tag, and gate option (i), done in the same sitting as M-3.
+- Answer:
