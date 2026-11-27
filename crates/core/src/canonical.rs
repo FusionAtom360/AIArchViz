@@ -655,7 +655,7 @@ mod tests {
                 footprint: Boundary::FromSpace { space: room },
                 slope_direction: src(Direction::PosY, Source::Derived),
                 high_edge_height: user(10 * FT),
-                low_edge_height: src(len(7 * FT), Source::Derived),
+                low_edge_height: Some(src(len(7 * FT), Source::Derived)),
                 pitch: Some(src(Pitch { rise: 3, run: 12 }, Source::UserStated)),
                 ledger: Some(Reference::WallFace {
                     wall,

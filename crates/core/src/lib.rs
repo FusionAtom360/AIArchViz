@@ -12,6 +12,7 @@ mod length;
 mod log;
 mod params;
 mod proposal;
+mod roof;
 mod solver;
 mod space;
 mod units;
@@ -46,6 +47,7 @@ pub use proposal::{
     Ambiguity, AmbiguityKind, Change, CommitError, DeriveError, Derived, DiffEntry, Flag, Proposal,
     ProposeError, ProposedAction, commit, derive, propose,
 };
+pub use roof::{RoofGeometry, RoofProblem, derive_roofs, roof_geometry};
 pub use solver::{
     Conflict, ConstraintReport, FreeClass, LayerA, Member, Outcome, Solution, SolveError, Solver,
 };

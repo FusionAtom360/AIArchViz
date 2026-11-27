@@ -291,3 +291,15 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) implement SetWallLayers {wall, layers, left_extent}: the wall gets exactly those layers and left extent with the sources given; if its layer set is shared with other walls, the wall gets a new layer set (the command's derived id) so the others are untouched, otherwise its set is edited in place; then the document is solved like any commit; (b) add layer thickness as a SetConstraintValue target instead.
 - Recommendation: (a). It is the 8.2 command made for this, and never changing other walls by surprise matches P4.
 - Answer: (a) SetWallLayers, copying a shared layer set (owner, 2026-11-26).
+
+## Q-44: Shed roof heights, run and pitch (T-115, status: answered)
+- Context: 6.5 gives "high-edge and low-edge heights, or pitch as rise:run" and eave overhangs, with pitch-derived heights rounded per 5.1. It does not say where heights are measured or what the run is. The Done when needs "a missing pitch or low edge" to be possible, but Roof.low_edge_height is currently required.
+- Options: (a) heights are above the storey elevation and are measured at the footprint (the bearing lines); the overhang extends the same plane beyond the footprint; the high edge is the footprint side facing up-slope (or the ledger face, Q-45) and the run is the horizontal distance from it to the footprint's low side along the slope direction; with a pitch, rise = run x rise / run rounded half to even to the nanometer, and low edge = high edge - rise, stored with source Derived; Roof.low_edge_height becomes optional (schema change); with only a low edge, pitch stays empty; with neither, required_parameters() lists the pitch as Missing with the low edge as its alternative (RequiredParameter gains `alternatives`); a user-stated pitch and a user-stated low edge that disagree are a violation (new kind RoofDefinition); (b) heights measured at the eave, including the overhang.
+- Recommendation: (a). Bearing-line heights are what a builder measures and states, and they do not change when an overhang is adjusted.
+- Answer: (a) heights at the footprint; low edge optional; RoofDefinition violation (owner, 2026-11-26).
+
+## Q-45: The ledger and the derived slope direction (T-115, status: answered)
+- Context: 6.5: a roof MAY name a ledger reference, "a face of an existing wall", where its high edge ends; in the lean-to case the slope direction is derived.
+- Options: (a) a ledger must be a WallFace of a wall whose function is existing; the roof slopes down away from that face, so the slope direction is the face's outward normal, stored with source Derived; the high edge lies at the face's solved coordinate; a ledger that is not such a face is a RoofDefinition violation; (b) the same, but any wall may carry a ledger.
+- Recommendation: (a). It follows 6.5 as written; a new wall can still take a roof through an explicit slope direction.
+- Answer: (a) existing walls only (owner, 2026-11-26).

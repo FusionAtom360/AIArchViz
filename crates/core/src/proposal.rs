@@ -75,6 +75,7 @@ pub fn derive(document: Document) -> Result<Derived, DeriveError> {
             space.boundary = boundary;
         }
     }
+    crate::roof::derive_roofs(&mut doc);
     let violations = validate(&doc, MIN_JAMB_DISTANCE).map_err(DeriveError::Geometry)?;
     prune_acknowledged(&mut doc, &violations);
     Ok(Derived {

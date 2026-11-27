@@ -1430,7 +1430,8 @@
           "$ref": "#/$defs/Boundary"
         },
         "high_edge_height": {
-          "$ref": "#/$defs/Sourced"
+          "$ref": "#/$defs/Sourced",
+          "description": "Above the storey elevation, at the footprint's high edge (Q-44)."
         },
         "ledger": {
           "anyOf": [
@@ -1444,7 +1445,15 @@
           "description": "A face of an existing wall where the high edge ends."
         },
         "low_edge_height": {
-          "$ref": "#/$defs/Sourced"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Above the storey elevation, at the footprint's low side; derived from\nthe pitch when there is one (Q-44)."
         },
         "material_slots": {
           "additionalProperties": {
@@ -1482,7 +1491,6 @@
         "footprint",
         "slope_direction",
         "high_edge_height",
-        "low_edge_height",
         "overhang",
         "thickness",
         "fascia_depth",
@@ -1788,6 +1796,11 @@
         {
           "const": "slab_outline",
           "description": "A Slab boundary is not a simple rectilinear polygon.",
+          "type": "string"
+        },
+        {
+          "const": "roof_definition",
+          "description": "A roof's ledger, footprint, run or heights do not define a roof (Q-44, Q-45).",
           "type": "string"
         },
         {

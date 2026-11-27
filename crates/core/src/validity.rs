@@ -51,6 +51,8 @@ pub enum Detail {
     Outline(SpaceError),
     /// A clearance zone is entered by a wall or another occurrence.
     Blocked,
+    /// Why a roof is not well defined.
+    Roof(crate::roof::RoofProblem),
     /// The footprints are `dx` and `dy` apart, closer than `required` (Q-32).
     TooClose {
         dx: Length,
@@ -183,6 +185,16 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
             found.push((
                 key(ViolationKind::SlabOutline, vec![*id]),
                 Detail::Outline(e),
+            ));
+        }
+    }
+
+    // Roofs (6.5, Q-44, Q-45).
+    for id in sound.roofs.keys() {
+        if let Err(problem) = crate::roof::roof_geometry(&sound, *id) {
+            found.push((
+                key(ViolationKind::RoofDefinition, vec![*id]),
+                Detail::Roof(problem),
             ));
         }
     }

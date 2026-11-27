@@ -756,8 +756,11 @@ pub struct Roof {
     pub footprint: Boundary,
     /// The direction the roof slopes down; derived when a ledger is named.
     pub slope_direction: Sourced<Direction>,
+    /// Above the storey elevation, at the footprint's high edge (Q-44).
     pub high_edge_height: Sourced<Length>,
-    pub low_edge_height: Sourced<Length>,
+    /// Above the storey elevation, at the footprint's low side; derived from
+    /// the pitch when there is one (Q-44).
+    pub low_edge_height: Option<Sourced<Length>>,
     pub pitch: Option<Sourced<Pitch>>,
     /// A face of an existing wall where the high edge ends.
     pub ledger: Option<Reference>,
@@ -829,6 +832,8 @@ pub enum ViolationKind {
     SpaceOutline,
     /// A Slab boundary is not a simple rectilinear polygon.
     SlabOutline,
+    /// A roof's ledger, footprint, run or heights do not define a roof (Q-44, Q-45).
+    RoofDefinition,
     /// A clearance zone is blocked by a wall or another occurrence (Q-32).
     ClearanceZone,
     /// A MinClearance constraint is not met after solving (7.1, Q-32).

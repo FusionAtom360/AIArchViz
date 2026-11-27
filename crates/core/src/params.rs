@@ -21,7 +21,7 @@ use crate::units::format_length;
 pub enum Reason {
     /// It holds a catalog default with source Proposed.
     ProposedDefault,
-    /// It has no value and no default (none until T-115).
+    /// It has no value and no default (a roof's pitch or low edge, T-115).
     Missing,
 }
 
@@ -52,6 +52,9 @@ pub struct RequiredParameter {
     /// The proposed default as shown to the user (feet-inches for lengths).
     pub proposed_display: Option<String>,
     pub unit: Unit,
+    /// Other fields that satisfy this one when given instead (e.g. a roof's
+    /// low edge instead of its pitch).
+    pub alternatives: Vec<String>,
 }
 
 /// Entity kinds in dependency order (Q-41).
@@ -137,6 +140,22 @@ pub fn required_parameters(document: &Document) -> Result<Vec<RequiredParameter>
                     proposed: value,
                     proposed_display,
                     unit,
+                    alternatives: Vec::new(),
+                });
+            }
+            // A roof needs a pitch or a low edge (6.5, Q-44).
+            let absent = |k: &str| entity.get(k).is_none_or(Value::is_null);
+            if *collection == "roofs" && absent("pitch") && absent("low_edge_height") {
+                out.push(RequiredParameter {
+                    collection: (*collection).to_string(),
+                    entity: id,
+                    label: None,
+                    field: "/pitch".to_string(),
+                    reason: Reason::Missing,
+                    proposed: None,
+                    proposed_display: None,
+                    unit: Unit::Pitch,
+                    alternatives: vec!["/low_edge_height".to_string()],
                 });
             }
         }
