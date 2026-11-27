@@ -476,6 +476,11 @@ mod tests {
                 },
                 clearance: clearance(36 * IN),
                 fixed: false,
+                overlap_allowed: false,
+                center: Point {
+                    x: len(10 * FT),
+                    y: len(2 * FT),
+                },
                 light: None,
             },
         );
@@ -491,6 +496,11 @@ mod tests {
                 },
                 clearance: clearance(0),
                 fixed: false,
+                overlap_allowed: false,
+                center: Point {
+                    x: len(10 * FT),
+                    y: len(6 * FT),
+                },
                 light: Some(Light {
                     kind: LightKind::Rect,
                     lumens: src(5000, Source::Imported),
@@ -517,6 +527,13 @@ mod tests {
                 },
                 clearance: clearance(0),
                 fixed: true,
+                overlap_allowed: false,
+                center: Point {
+                    // 2 ft past the door's end edge (4 ft + 3 ft); back on the
+                    // left face (2 1/4 in), half the 30 in depth out from it.
+                    x: len(9 * FT),
+                    y: len(IN / 2 + (3 * IN + IN / 2) / 2 + 15 * IN),
+                },
                 light: None,
             },
         );

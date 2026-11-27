@@ -12,16 +12,26 @@
 //!    minimum jamb distance from either end, and between base and top;
 //! 4. every Space and Slab outline is a simple rectilinear polygon.
 //!
-//! The occurrence-overlap invariant is checked from T-111 on (Q-27).
+//! 5. no occurrence overlaps a wall or another occurrence (plan area and
+//!    height range both shared) unless one is marked `overlap_allowed`; no
+//!    clearance zone is entered by a wall or by an occurrence at the same
+//!    height; every driving MinClearance holds, measured exactly between
+//!    footprints (a wall by its footprint's bounding rectangle) (Q-32).
 //!
 //! Each violation has a key (kind and sorted entity ids). A violation whose
 //! key is in the document's `acknowledged` set does not block commit (Q-28).
 
 use std::collections::BTreeSet;
 
-use crate::document::{Direction, Document, Point, ViolationKey, ViolationKind, Wall};
-use crate::geometry::{GeometryError, OpeningProblem, opening_violations, wall_geometry};
+use crate::document::{
+    ConstraintKind, ConstraintStatus, Direction, Document, Placement, Point, ViolationKey,
+    ViolationKind, Wall,
+};
+use crate::geometry::{
+    GeometryError, OpeningProblem, opening_violations, wall_geometry, wall_profiles,
+};
 use crate::identity::Uuid;
+use crate::items::{Rect, clearance_zone, footprint, height_range};
 use crate::length::Length;
 use crate::space::SpaceError;
 use crate::space::{boundary_outline, space_boundary};
@@ -39,6 +49,14 @@ pub enum Detail {
     Opening(Vec<OpeningProblem>),
     /// Why the outline is not a simple rectilinear polygon.
     Outline(SpaceError),
+    /// A clearance zone is entered by a wall or another occurrence.
+    Blocked,
+    /// The footprints are `dx` and `dy` apart, closer than `required` (Q-32).
+    TooClose {
+        dx: Length,
+        dy: Length,
+        required: Length,
+    },
 }
 
 /// One failed invariant.
@@ -112,6 +130,10 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
     let mut sound = document.clone();
     sound.walls.retain(|id, _| !bad.contains(id));
     sound.openings.retain(|_, o| !bad.contains(&o.host));
+    sound.occurrences.retain(|_, o| match &o.placement {
+        Placement::WallMounted { wall, .. } => !bad.contains(wall),
+        _ => true,
+    });
 
     // 2. Overlapping walls without a declared join.
     let geometry = wall_geometry(&sound)?;
@@ -165,6 +187,9 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
         }
     }
 
+    // 5. Occurrences: overlap, clearance zones, MinClearance (Q-32).
+    occurrence_checks(&sound, &geometry, &mut found)?;
+
     found.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(found
         .into_iter()
@@ -174,6 +199,183 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
             detail,
         })
         .collect())
+}
+
+/// A wall as the occurrence checks see it: id, wall, footprint, base and top.
+type WallBox<'d> = (Uuid, &'d Wall, &'d Vec<Point>, (Length, Length));
+
+/// An occurrence as the checks see it.
+struct Item<'d> {
+    id: Uuid,
+    occurrence: &'d crate::document::Occurrence,
+    footprint: Rect,
+    zone: Rect,
+    heights: (Length, Length),
+}
+
+fn rect_points(r: &Rect) -> Vec<Point> {
+    vec![
+        r.min,
+        Point {
+            x: r.max.x,
+            y: r.min.y,
+        },
+        r.max,
+        Point {
+            x: r.min.x,
+            y: r.max.y,
+        },
+    ]
+}
+
+fn rects_overlap(a: &Rect, b: &Rect) -> bool {
+    a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y
+}
+
+fn heights_overlap(a: (Length, Length), b: (Length, Length)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn occurrence_checks(
+    document: &Document,
+    geometry: &std::collections::BTreeMap<Uuid, crate::geometry::WallGeometry>,
+    found: &mut Vec<(ViolationKey, Detail)>,
+) -> Result<(), GeometryError> {
+    let key = |kind, mut entities: Vec<Uuid>| {
+        entities.sort();
+        ViolationKey { kind, entities }
+    };
+    let items = document
+        .occurrences
+        .iter()
+        .map(|(id, o)| {
+            Ok(Item {
+                id: *id,
+                occurrence: o,
+                footprint: footprint(document, *id)?,
+                zone: clearance_zone(document, *id)?,
+                heights: height_range(document, *id)?,
+            })
+        })
+        .collect::<Result<Vec<_>, GeometryError>>()?;
+    let profiles = wall_profiles(document)?;
+    let walls: Vec<WallBox<'_>> = document
+        .walls
+        .iter()
+        .filter_map(|(id, w)| {
+            let g = geometry.get(id)?;
+            let p = profiles.get(id)?;
+            Some((*id, w, &g.footprint, (p.base, p.top)))
+        })
+        .collect();
+    let zone_used = |i: &Item| i.zone != i.footprint;
+    for (n, a) in items.iter().enumerate() {
+        // Against walls.
+        for (wid, w, poly, wh) in &walls {
+            if w.storey != a.occurrence.storey || a.occurrence.overlap_allowed {
+                continue;
+            }
+            if heights_overlap(a.heights, *wh)
+                && interiors_overlap(&rect_points(&a.footprint), poly)
+            {
+                found.push((
+                    key(ViolationKind::OccurrenceOverlap, vec![a.id, *wid]),
+                    Detail::Overlap,
+                ));
+            }
+            if zone_used(a)
+                && heights_overlap(a.heights, *wh)
+                && interiors_overlap(&rect_points(&a.zone), poly)
+            {
+                found.push((
+                    key(ViolationKind::ClearanceZone, vec![a.id, *wid]),
+                    Detail::Blocked,
+                ));
+            }
+        }
+        // Against other occurrences.
+        for (m, b) in items.iter().enumerate() {
+            if m == n || a.occurrence.storey != b.occurrence.storey {
+                continue;
+            }
+            let exempt = a.occurrence.overlap_allowed || b.occurrence.overlap_allowed;
+            let stacked = heights_overlap(a.heights, b.heights);
+            if m > n && !exempt && stacked && rects_overlap(&a.footprint, &b.footprint) {
+                found.push((
+                    key(ViolationKind::OccurrenceOverlap, vec![a.id, b.id]),
+                    Detail::Overlap,
+                ));
+            }
+            if zone_used(a) && !exempt && stacked && rects_overlap(&a.zone, &b.footprint) {
+                found.push((
+                    key(ViolationKind::ClearanceZone, vec![a.id, b.id]),
+                    Detail::Blocked,
+                ));
+            }
+        }
+    }
+    // MinClearance (7.1): exact distance between footprints, compared squared.
+    let rect_of = |id: Uuid| -> Result<Rect, GeometryError> {
+        if document.occurrences.contains_key(&id) {
+            return footprint(document, id);
+        }
+        let g = geometry
+            .get(&id)
+            .ok_or(GeometryError::UnknownEntity { id })?;
+        let (xs, ys): (Vec<Length>, Vec<Length>) = g.footprint.iter().map(|p| (p.x, p.y)).unzip();
+        match (
+            xs.iter().min(),
+            xs.iter().max(),
+            ys.iter().min(),
+            ys.iter().max(),
+        ) {
+            (Some(&x0), Some(&x1), Some(&y0), Some(&y1)) => Ok(Rect {
+                min: Point { x: x0, y: y0 },
+                max: Point { x: x1, y: y1 },
+            }),
+            _ => Err(GeometryError::UnknownEntity { id }),
+        }
+    };
+    for (id, c) in &document.constraints {
+        let ConstraintKind::MinClearance {
+            object,
+            other,
+            value,
+        } = c.kind
+        else {
+            continue;
+        };
+        if c.status != ConstraintStatus::Driving {
+            continue;
+        }
+        if !document.occurrences.contains_key(&object) {
+            return Err(GeometryError::UnknownEntity { id: object });
+        }
+        let (a, b) = (rect_of(object)?, rect_of(other)?);
+        let n = |l: Length| i128::from(l.nanometers());
+        let gap = |a0: Length, a1: Length, b0: Length, b1: Length| {
+            0.max(n(b0) - n(a1)).max(n(a0) - n(b1))
+        };
+        let dx = gap(a.min.x, a.max.x, b.min.x, b.max.x);
+        let dy = gap(a.min.y, a.max.y, b.min.y, b.max.y);
+        let v = n(value);
+        if dx * dx + dy * dy < v * v {
+            let len = |v: i128| {
+                i64::try_from(v)
+                    .map(Length::from_nanometers)
+                    .map_err(|_| GeometryError::Overflow)
+            };
+            found.push((
+                key(ViolationKind::MinClearance, vec![*id]),
+                Detail::TooClose {
+                    dx: len(dx)?,
+                    dy: len(dy)?,
+                    required: value,
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether two convex polygons share area (separating axis test, exact).
@@ -657,5 +859,172 @@ mod tests {
         let mut sorted = ks.clone();
         sorted.sort();
         assert_eq!(ks, sorted);
+    }
+}
+
+#[cfg(test)]
+mod occurrence_tests {
+    use super::*;
+    use crate::defaults::MIN_JAMB_DISTANCE;
+    use crate::document::*;
+    use crate::items::tests::{IN, STOREY, base, floor, len, on_wall, put, sourced, uid};
+
+    fn check(doc: &Document) -> Vec<Violation> {
+        validate(doc, MIN_JAMB_DISTANCE).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn keys(v: &[Violation]) -> Vec<(ViolationKind, Vec<Uuid>)> {
+        v.iter()
+            .map(|v| (v.key.kind, v.key.entities.clone()))
+            .collect()
+    }
+
+    fn sorted(mut v: Vec<Uuid>) -> Vec<Uuid> {
+        v.sort();
+        v
+    }
+
+    const WALL: Uuid = Uuid::from_bytes([2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
+    /// Done when: floor items stay and are rechecked.
+    #[test]
+    fn floor_items_are_rechecked_after_a_wall_moves() {
+        let mut doc = base();
+        let bench = put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        assert_eq!(check(&doc), vec![]);
+        // The wall moves 50 in north (its faces now at y = 48 to 52); the bench stays.
+        for n in [1, 2] {
+            if let Some(node) = doc.nodes.get_mut(&uid(1, n)) {
+                node.y = len(50 * IN);
+            }
+        }
+        assert_eq!(
+            keys(&check(&doc)),
+            vec![(ViolationKind::OccurrenceOverlap, sorted(vec![bench, WALL]))]
+        );
+    }
+
+    #[test]
+    fn occurrences_overlap_only_in_plan_and_height() {
+        let mut doc = base();
+        let a = put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        let b = put(&mut doc, 2, floor(120, 70, 0), (120, 70));
+        assert_eq!(
+            keys(&check(&doc)),
+            vec![(ViolationKind::OccurrenceOverlap, sorted(vec![a, b]))]
+        );
+        // Marked as intentionally overlapping: no violation.
+        if let Some(o) = doc.occurrences.get_mut(&b) {
+            o.overlap_allowed = true;
+        }
+        assert_eq!(check(&doc), vec![]);
+        // A ceiling light over the bench shares plan area but not height.
+        let mut doc = base();
+        put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        put(
+            &mut doc,
+            2,
+            Placement::CeilingMounted {
+                x: sourced(100 * IN),
+                y: sourced(60 * IN),
+            },
+            (100, 60),
+        );
+        assert_eq!(check(&doc), vec![]);
+        // A wall-mounted cabinet sits on the wall face: touching is fine.
+        let mut doc = base();
+        put(&mut doc, 1, on_wall(WallSide::Left, 60, 48), (60, 14));
+        assert_eq!(check(&doc), vec![]);
+    }
+
+    #[test]
+    fn clearance_zones_must_stay_clear() {
+        let mut doc = base();
+        // Rotation 2: front faces +Y, toward the wall. Footprint y = -42 to -18.
+        let bench = put(&mut doc, 1, floor(100, -30, 2), (100, -30));
+        assert_eq!(check(&doc), vec![]);
+        if let Some(o) = doc.occurrences.get_mut(&bench) {
+            o.clearance.front = sourced(36 * IN);
+        }
+        let v = check(&doc);
+        assert_eq!(
+            keys(&v),
+            vec![(ViolationKind::ClearanceZone, sorted(vec![bench, WALL]))]
+        );
+        assert_eq!(v.first().map(|v| v.detail.clone()), Some(Detail::Blocked));
+        // Another bench standing in the zone.
+        let mut doc = base();
+        let a = put(&mut doc, 1, floor(100, -100, 2), (100, -100));
+        if let Some(o) = doc.occurrences.get_mut(&a) {
+            o.clearance.front = sourced(36 * IN);
+        }
+        let b = put(&mut doc, 2, floor(100, -60, 0), (100, -60));
+        assert_eq!(
+            keys(&check(&doc)),
+            vec![(ViolationKind::ClearanceZone, sorted(vec![a, b]))]
+        );
+    }
+
+    fn min_clearance(doc: &mut Document, object: Uuid, other: Uuid, value: i64) -> Uuid {
+        let id = uid(3, 50);
+        doc.constraints.insert(
+            id,
+            Constraint {
+                kind: ConstraintKind::MinClearance {
+                    object,
+                    other,
+                    value: len(value * IN),
+                },
+                status: ConstraintStatus::Driving,
+                source: Source::UserStated,
+                provenance: None,
+            },
+        );
+        id
+    }
+
+    #[test]
+    fn min_clearance_is_evaluated_after_solving() {
+        // A: x 76..124, y 88..112. B: x 127..175, y 116..140. Gap 3 by 4: 5 in.
+        let make = |required| {
+            let mut doc = base();
+            let a = put(&mut doc, 1, floor(100, 100, 0), (100, 100));
+            let b = put(&mut doc, 2, floor(151, 128, 0), (151, 128));
+            let c = min_clearance(&mut doc, a, b, required);
+            (doc, c)
+        };
+        let (doc, _) = make(5);
+        assert_eq!(check(&doc), vec![]);
+        let (doc, c) = make(6);
+        let v = check(&doc);
+        assert_eq!(keys(&v), vec![(ViolationKind::MinClearance, vec![c])]);
+        assert_eq!(
+            v.first().map(|v| v.detail.clone()),
+            Some(Detail::TooClose {
+                dx: len(3 * IN),
+                dy: len(4 * IN),
+                required: len(6 * IN)
+            })
+        );
+        // Against a wall: its footprint is y = -2 to 2; the bench starts at y = 48.
+        let mut doc = base();
+        let bench = put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        min_clearance(&mut doc, bench, WALL, 46);
+        assert_eq!(check(&doc), vec![]);
+        let mut doc = base();
+        let bench = put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        let c = min_clearance(&mut doc, bench, WALL, 47);
+        assert_eq!(
+            keys(&check(&doc)),
+            vec![(ViolationKind::MinClearance, vec![c])]
+        );
+        // An unknown object is an error.
+        let mut doc = base();
+        min_clearance(&mut doc, uid(14, 9), WALL, 1);
+        assert_eq!(
+            validate(&doc, MIN_JAMB_DISTANCE),
+            Err(GeometryError::UnknownEntity { id: uid(14, 9) })
+        );
+        let _ = STOREY;
     }
 }

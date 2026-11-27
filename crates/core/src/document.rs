@@ -619,7 +619,11 @@ pub struct Occurrence {
     pub clearance: Clearance,
     /// Never moves as a consequence of another edit (6.3).
     pub fixed: bool,
+    /// May overlap walls and other occurrences without a violation (7.7, Q-32).
+    pub overlap_allowed: bool,
     pub light: Option<Light>,
+    /// Solved footprint center in plan. Derived and stored (Q-7, Q-31).
+    pub center: Point,
 }
 
 /// An operator instance and the children it derived (8.5).
@@ -823,7 +827,11 @@ pub enum ViolationKind {
     SpaceOutline,
     /// A Slab boundary is not a simple rectilinear polygon.
     SlabOutline,
-    /// Reserved: checked from T-111 on (Q-27).
+    /// A clearance zone is blocked by a wall or another occurrence (Q-32).
+    ClearanceZone,
+    /// A MinClearance constraint is not met after solving (7.1, Q-32).
+    MinClearance,
+    /// An occurrence overlaps a wall or another occurrence (Q-27, Q-32).
     OccurrenceOverlap,
 }
 

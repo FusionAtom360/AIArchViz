@@ -22,7 +22,14 @@
 //! placed at coordinate(reference) + direction * offset, less the anchor
 //! edge's shift. Placements are processed before constraints, in opening id
 //! order, and a placement that disagrees is a Conflict naming the opening
-//! (Q-20). Item references are added by T-111 (Q-16).
+//! (Q-20).
+//!
+//! Each occurrence has a center variable (Q-31): on both axes for floor and
+//! ceiling items, which stay put unless a constraint moves them; on its
+//! host's along axis for a wall-mounted item, whose across coordinate is the
+//! host's face, so it follows the wall. A Fixed occurrence is anchored at its
+//! stored center before anything else, so whatever would move it is a
+//! Conflict naming it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -106,6 +113,8 @@ pub enum Member {
     Wall(Uuid),
     /// An opening's position along its host (Q-20).
     Opening(Uuid),
+    /// An occurrence's center on the class's axis (Q-31).
+    Occurrence(Uuid),
 }
 
 /// One underconstrained class: its members move together by one translation.
@@ -122,6 +131,8 @@ pub struct Solution {
     pub nodes: BTreeMap<Uuid, Point>,
     /// Every opening's start-edge coordinate on its host's along axis (Q-20).
     pub openings: BTreeMap<Uuid, Length>,
+    /// Every occurrence's footprint center (Q-31).
+    pub occurrences: BTreeMap<Uuid, Point>,
     pub constraints: BTreeMap<Uuid, ConstraintReport>,
     /// Sorted by constraint id.
     pub conflicts: Vec<Conflict>,
@@ -133,6 +144,19 @@ impl Solution {
     /// Writes the solved node positions, Equal-copied values and demotions
     /// back into `document`.
     pub fn apply_to(&self, document: &mut Document) {
+        for (id, center) in &self.occurrences {
+            if let Some(o) = document.occurrences.get_mut(id) {
+                o.center = *center;
+                match &mut o.placement {
+                    crate::document::Placement::Floor { x, y, .. }
+                    | crate::document::Placement::CeilingMounted { x, y } => {
+                        x.value = center.x;
+                        y.value = center.y;
+                    }
+                    crate::document::Placement::WallMounted { .. } => {}
+                }
+            }
+        }
         for (id, start) in &self.openings {
             if let Some(o) = document.openings.get_mut(id) {
                 o.start = *start;
@@ -165,8 +189,6 @@ impl Solution {
 pub enum SolveError {
     /// An entity named by a wall or constraint does not exist.
     UnknownEntity { id: Uuid },
-    /// A reference kind T-106 does not solve yet (Q-16).
-    UnsupportedReference { constraint: Uuid },
     /// A reference has no coordinate on the constraint's axis.
     WrongAxis { constraint: Uuid },
     /// A WallFace boundary index beyond the wall's layers.
@@ -181,12 +203,6 @@ impl fmt::Display for SolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SolveError::UnknownEntity { id } => write!(f, "no entity {id}"),
-            SolveError::UnsupportedReference { constraint } => {
-                write!(
-                    f,
-                    "constraint {constraint} uses a reference Layer A does not solve yet"
-                )
-            }
             SolveError::WrongAxis { constraint } => {
                 write!(
                     f,
@@ -371,7 +387,21 @@ struct Engine<'d> {
     nodes: BTreeMap<Uuid, usize>,
     /// Each opening's variable: its start edge on the host's along axis.
     openings: BTreeMap<Uuid, usize>,
+    /// Each occurrence's variable: its center (both axes for floor and
+    /// ceiling items, the host's along axis for wall-mounted items).
+    items: BTreeMap<Uuid, usize>,
     axes: [Axis1; 2],
+}
+
+fn from_geometry(e: crate::geometry::GeometryError) -> SolveError {
+    match e {
+        crate::geometry::GeometryError::UnknownEntity { id } => SolveError::UnknownEntity { id },
+        _ => SolveError::Overflow,
+    }
+}
+
+fn direction_axis(d: Direction) -> (Axis, i128) {
+    along_frame(d)
 }
 
 /// The axis a wall runs along and the sign of its direction on it.
@@ -407,12 +437,19 @@ impl<'d> Engine<'d> {
             .enumerate()
             .map(|(i, id)| (*id, nodes.len() + 1 + i))
             .collect();
-        let n = nodes.len() + openings.len() + 1;
+        let items: BTreeMap<Uuid, usize> = doc
+            .occurrences
+            .keys()
+            .enumerate()
+            .map(|(i, id)| (*id, nodes.len() + openings.len() + 1 + i))
+            .collect();
+        let n = nodes.len() + openings.len() + items.len() + 1;
         let mut engine = Engine {
             doc,
             tolerance: i128::from(tolerance.nanometers()),
             nodes,
             openings,
+            items,
             axes: [Axis1::new(n), Axis1::new(n)],
         };
         for wall in doc.walls.values() {
@@ -425,6 +462,51 @@ impl<'d> Engine<'d> {
             }
         }
         Ok(engine)
+    }
+
+    /// The variable and constant giving an item's center on `axis`.
+    fn item_center(&self, id: Uuid, axis: Axis) -> Result<(usize, i128), SolveError> {
+        let o = self
+            .doc
+            .occurrences
+            .get(&id)
+            .ok_or(SolveError::UnknownEntity { id })?;
+        let var = self
+            .items
+            .get(&id)
+            .copied()
+            .ok_or(SolveError::UnknownEntity { id })?;
+        let crate::document::Placement::WallMounted { wall, side, .. } = &o.placement else {
+            return Ok((var, 0));
+        };
+        let w = self
+            .doc
+            .walls
+            .get(wall)
+            .ok_or(SolveError::UnknownEntity { id: *wall })?;
+        let (line_axis, sign) = wall_frame(w.direction);
+        if axis != line_axis {
+            return Ok((var, 0));
+        }
+        let set = self
+            .doc
+            .layer_sets
+            .get(&w.layer_set)
+            .ok_or(SolveError::UnknownEntity { id: w.layer_set })?;
+        let total: i128 = set
+            .layers
+            .iter()
+            .map(|l| i128::from(l.thickness.value.nanometers()))
+            .sum();
+        let left = i128::from(w.left_extent.value.nanometers());
+        let (face, normal) = match side {
+            WallSide::Left => (sign * left, sign),
+            WallSide::Right => (-sign * (total - left), -sign),
+        };
+        let (sx, sy) = crate::items::world_size(self.doc, id).map_err(from_geometry)?;
+        let depth = if axis == Axis::X { sx } else { sy };
+        let min = if normal > 0 { face } else { face - depth };
+        Ok((self.node(w.node_a)?, min + half(depth)))
     }
 
     /// An opening's variable, its host's along axis and direction, and its width.
@@ -524,8 +606,24 @@ impl<'d> Engine<'d> {
                 }
                 Ok((var, edge_shift(edge, dir, width)))
             }
-            Reference::ItemEdge { .. } | Reference::ItemCenter { .. } => {
-                Err(SolveError::UnsupportedReference { constraint })
+            Reference::ItemCenter { item } => self.item_center(item, axis),
+            Reference::ItemEdge { item, side } => {
+                let (var, c) = self.item_center(item, axis)?;
+                let q = crate::items::rotation(self.doc, item).map_err(from_geometry)?;
+                let (edge_axis, sign) = direction_axis(crate::items::side_direction(q, side));
+                if edge_axis != axis {
+                    return Err(wrong);
+                }
+                let (sx, sy) = crate::items::world_size(self.doc, item).map_err(from_geometry)?;
+                let size = if axis == Axis::X { sx } else { sy };
+                Ok((
+                    var,
+                    if sign > 0 {
+                        c - half(size) + size
+                    } else {
+                        c - half(size)
+                    },
+                ))
             }
         }
     }
@@ -569,6 +667,63 @@ impl<'d> Engine<'d> {
         order.sort_by_key(|(id, c)| (authority(c.source), **id));
 
         let mut conflicts = Vec::new();
+
+        // Fixed occurrences are anchored at their stored center first, so
+        // anything that would move one conflicts with it (6.3, Q-31).
+        for (id, o) in &doc.occurrences {
+            if !o.fixed {
+                continue;
+            }
+            for (axis, stored) in [(Axis::X, o.center.x), (Axis::Y, o.center.y)] {
+                let (v, c) = self.item_center(*id, axis)?;
+                let d = i128::from(stored.nanometers()) - c;
+                let ax = &mut self.axes[axis_index(axis)];
+                match ax.relation(0, v) {
+                    None => ax.union(0, v, d, Label::Constraint(*id)),
+                    Some(current) if current == d => {}
+                    Some(current) => conflicts.push(Conflict {
+                        constraint: *id,
+                        with: ax.path(0, v),
+                        residual: Some(to_length(current - d)?),
+                    }),
+                }
+            }
+        }
+
+        // Wall-mounted placements: center = reference + direction * offset (Q-30).
+        for (id, o) in &doc.occurrences {
+            let crate::document::Placement::WallMounted {
+                wall,
+                reference,
+                offset,
+                ..
+            } = &o.placement
+            else {
+                continue;
+            };
+            let w = doc
+                .walls
+                .get(wall)
+                .ok_or(SolveError::UnknownEntity { id: *wall })?;
+            let (along, dir) = along_frame(w.direction);
+            let var = self
+                .items
+                .get(id)
+                .copied()
+                .ok_or(SolveError::UnknownEntity { id: *id })?;
+            let (rv, rc) = self.resolve(reference, along, *id)?;
+            let d = rc + dir * i128::from(offset.value.nanometers());
+            let ax = &mut self.axes[axis_index(along)];
+            match ax.relation(rv, var) {
+                None => ax.union(rv, var, d, Label::Constraint(*id)),
+                Some(current) if current == d => {}
+                Some(current) => conflicts.push(Conflict {
+                    constraint: *id,
+                    with: ax.path(rv, var),
+                    residual: Some(to_length(current - d)?),
+                }),
+            }
+        }
 
         // Opening placements (Q-20), in id order, before any constraint:
         // start = coordinate(reference) + direction * offset - anchor shift.
@@ -739,6 +894,7 @@ impl<'d> Engine<'d> {
         // stored coordinate of the class's lowest-id node (7.4).
         let mut coords: [BTreeMap<Uuid, i128>; 2] = [BTreeMap::new(), BTreeMap::new()];
         let mut opening_starts: BTreeMap<Uuid, i128> = BTreeMap::new();
+        let mut item_centers: [BTreeMap<Uuid, i128>; 2] = [BTreeMap::new(), BTreeMap::new()];
         let mut classes: [BTreeMap<usize, BTreeSet<Member>>; 2] =
             [BTreeMap::new(), BTreeMap::new()];
         for (k, axis) in [Axis::X, Axis::Y].into_iter().enumerate() {
@@ -799,6 +955,47 @@ impl<'d> Engine<'d> {
                 };
                 opening_starts.insert(*id, value);
             }
+            for (id, &var) in &self.items {
+                let Some(o) = doc.occurrences.get(id) else {
+                    continue;
+                };
+                let stored = i128::from(match axis {
+                    Axis::X => o.center.x.nanometers(),
+                    Axis::Y => o.center.y.nanometers(),
+                });
+                if let crate::document::Placement::WallMounted { wall, .. } = &o.placement {
+                    let w = doc
+                        .walls
+                        .get(wall)
+                        .ok_or(SolveError::UnknownEntity { id: *wall })?;
+                    if along_frame(w.direction).0 != axis {
+                        // Across the wall: the host's line plus a constant.
+                        let (node_var, c) = self.item_center(*id, axis)?;
+                        let node_id = self
+                            .nodes
+                            .iter()
+                            .find(|(_, v)| **v == node_var)
+                            .map(|(n, _)| *n)
+                            .ok_or(SolveError::UnknownEntity { id: *wall })?;
+                        let line = coords[k].get(&node_id).copied().unwrap_or(0);
+                        item_centers[k].insert(*id, line + c);
+                        continue;
+                    }
+                }
+                let ax = &mut self.axes[k];
+                let (root, off) = ax.find(var);
+                let value = if root == ground_root {
+                    off - ground_off
+                } else {
+                    let base = *anchors.entry(root).or_insert(stored - off);
+                    classes[k]
+                        .entry(root)
+                        .or_default()
+                        .insert(Member::Occurrence(*id));
+                    base + off
+                };
+                item_centers[k].insert(*id, value);
+            }
         }
         let mut nodes = BTreeMap::new();
         for id in doc.nodes.keys() {
@@ -823,6 +1020,21 @@ impl<'d> Engine<'d> {
         }
         Ok(Solution {
             nodes,
+            occurrences: doc
+                .occurrences
+                .keys()
+                .map(|id| {
+                    let x = item_centers[0].get(id).copied().unwrap_or(0);
+                    let y = item_centers[1].get(id).copied().unwrap_or(0);
+                    Ok((
+                        *id,
+                        Point {
+                            x: to_length(x)?,
+                            y: to_length(y)?,
+                        },
+                    ))
+                })
+                .collect::<Result<_, SolveError>>()?,
             openings: opening_starts
                 .into_iter()
                 .map(|(id, v)| Ok((id, to_length(v)?)))
@@ -1206,11 +1418,10 @@ mod tests {
         ] {
             let mut doc = l_shape();
             add(&mut doc, 1, fixed(r, Axis::X, 0), Source::UserStated);
+            // Item references are solved since T-111; a missing item is unknown.
             assert_eq!(
                 solve(&doc),
-                Err(SolveError::UnsupportedReference {
-                    constraint: con_id(1)
-                })
+                Err(SolveError::UnknownEntity { id: uid(7, 0) })
             );
         }
 
@@ -2050,6 +2261,270 @@ mod tests {
             prop_assert_eq!(&sa.underconstrained, &sb.underconstrained);
             for (i, x) in xs.iter().enumerate() {
                 prop_assert_eq!(sa.nodes.get(&node_id(i as u8)).map(|p| p.x.nanometers()), Some(*x));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod occurrence_tests {
+    use super::*;
+    use crate::document::*;
+    use crate::items::tests::{IN, base, floor, len, on_wall, put, uid};
+
+    fn fixed(doc: &mut Document, n: u8, reference: Reference, axis: Axis, value: i64) {
+        doc.constraints.insert(
+            uid(3, n),
+            Constraint {
+                kind: ConstraintKind::Fixed {
+                    reference,
+                    axis,
+                    value: len(value * IN),
+                },
+                status: ConstraintStatus::Driving,
+                source: Source::UserStated,
+                provenance: None,
+            },
+        );
+    }
+
+    fn node(n: u8) -> Reference {
+        Reference::Node { node: uid(1, n) }
+    }
+
+    /// The +X wall of items::tests::base, anchored with its line at `y` in.
+    fn anchored(y: i64) -> Document {
+        let mut doc = base();
+        fixed(&mut doc, 1, node(1), Axis::X, 0);
+        fixed(&mut doc, 2, node(1), Axis::Y, y);
+        fixed(&mut doc, 3, node(2), Axis::X, 240);
+        doc
+    }
+
+    fn center(s: &Solution, id: Uuid) -> Option<(i64, i64)> {
+        s.occurrences
+            .get(&id)
+            .map(|p| (p.x.nanometers() / IN, p.y.nanometers() / IN))
+    }
+
+    fn solve(doc: &Document) -> Result<Solution, SolveError> {
+        LayerA::default().solve(doc)
+    }
+
+    /// Done when: wall-mounted items follow a moved host wall.
+    #[test]
+    fn wall_mounted_items_follow_a_moved_host_wall() -> Result<(), SolveError> {
+        let mut doc = anchored(0);
+        let item = put(&mut doc, 1, on_wall(WallSide::Left, 60, 48), (0, 0));
+        let s = solve(&doc)?;
+        // Back on the left face (y = 2), 24 in deep: center y = 14.
+        assert_eq!(center(&s, item), Some((60, 14)));
+        s.apply_to(&mut doc);
+        assert_eq!(
+            doc.occurrences.get(&item).map(|o| o.center),
+            Some(Point {
+                x: len(60 * IN),
+                y: len(14 * IN)
+            })
+        );
+        // Move the wall 36 in north: the item moves with it.
+        fixed(&mut doc, 2, node(1), Axis::Y, 36);
+        assert_eq!(center(&solve(&doc)?, item), Some((60, 50)));
+        // Move the wall's start node east: the item keeps its offset from it.
+        fixed(&mut doc, 1, node(1), Axis::X, 30);
+        assert_eq!(center(&solve(&doc)?, item), Some((90, 50)));
+        Ok(())
+    }
+
+    /// Done when: floor items stay (and are rechecked; see validity).
+    #[test]
+    fn floor_items_stay_when_a_wall_moves() -> Result<(), SolveError> {
+        let mut doc = anchored(0);
+        let item = put(&mut doc, 1, floor(100, 60, 0), (100, 60));
+        assert_eq!(center(&solve(&doc)?, item), Some((100, 60)));
+        fixed(&mut doc, 2, node(1), Axis::Y, 50);
+        let s = solve(&doc)?;
+        assert_eq!(center(&s, item), Some((100, 60)));
+        // Free on both axes: listed in the degrees-of-freedom report.
+        let members: Vec<_> = s
+            .underconstrained
+            .iter()
+            .map(|c| c.members.clone())
+            .collect();
+        assert_eq!(
+            members,
+            vec![
+                vec![Member::Occurrence(item)],
+                vec![Member::Occurrence(item)]
+            ]
+        );
+        s.apply_to(&mut doc);
+        let xy = doc.occurrences.get(&item).map(|o| match &o.placement {
+            Placement::Floor { x, y, .. } => (x.value.nanometers() / IN, y.value.nanometers() / IN),
+            _ => (0, 0),
+        });
+        assert_eq!(xy, Some((100, 60)));
+        Ok(())
+    }
+
+    /// Done when: a Fixed item refuses to move.
+    #[test]
+    fn a_fixed_item_refuses_to_move() -> Result<(), SolveError> {
+        // A fixed wall-mounted item pins its host wall: moving the wall conflicts.
+        let mut doc = anchored(0);
+        let item = put(&mut doc, 1, on_wall(WallSide::Left, 60, 48), (60, 14));
+        if let Some(o) = doc.occurrences.get_mut(&item) {
+            o.fixed = true;
+        }
+        assert!(solve(&doc)?.conflicts.is_empty());
+        fixed(&mut doc, 2, node(1), Axis::Y, 36);
+        let s = solve(&doc)?;
+        assert_eq!(
+            s.conflicts,
+            vec![Conflict {
+                constraint: uid(3, 2),
+                with: vec![item],
+                residual: Some(len(-36 * IN))
+            }]
+        );
+        assert_eq!(center(&s, item), Some((60, 14)));
+        // A fixed floor item: a constraint that would push it is a Conflict naming it.
+        let mut doc = anchored(0);
+        let column = put(&mut doc, 2, floor(100, 60, 0), (100, 60));
+        if let Some(o) = doc.occurrences.get_mut(&column) {
+            o.fixed = true;
+        }
+        let face = Reference::WallFace {
+            wall: uid(2, 1),
+            side: WallSide::Left,
+            boundary: 0,
+        };
+        let front = Reference::ItemEdge {
+            item: column,
+            side: ItemSide::Front,
+        };
+        doc.constraints.insert(
+            uid(3, 9),
+            Constraint {
+                kind: ConstraintKind::Distance {
+                    a: face,
+                    b: front,
+                    axis: Axis::Y,
+                    value: len(36 * IN),
+                    tolerance: None,
+                },
+                status: ConstraintStatus::Driving,
+                source: Source::UserStated,
+                provenance: None,
+            },
+        );
+        let s = solve(&doc)?;
+        // Front edge is at 60 - 12 = 48, face at 2: the distance is 46, not 36.
+        assert_eq!(s.conflicts.len(), 1);
+        assert_eq!(
+            s.conflicts
+                .first()
+                .map(|c| (c.constraint, c.with.contains(&column))),
+            Some((uid(3, 9), true))
+        );
+        assert_eq!(center(&s, column), Some((100, 60)));
+        Ok(())
+    }
+
+    #[test]
+    fn item_edges_follow_rotation() -> Result<(), SolveError> {
+        let mut doc = anchored(0);
+        // Rotation 1: front faces +X; world size 24 x 48.
+        let item = put(&mut doc, 1, floor(0, 0, 1), (0, 0));
+        fixed(
+            &mut doc,
+            5,
+            Reference::ItemEdge {
+                item,
+                side: ItemSide::Front,
+            },
+            Axis::X,
+            200,
+        );
+        fixed(&mut doc, 6, Reference::ItemCenter { item }, Axis::Y, 50);
+        assert_eq!(center(&solve(&doc)?, item), Some((188, 50)));
+        // The front edge has no Y coordinate at this rotation.
+        fixed(
+            &mut doc,
+            7,
+            Reference::ItemEdge {
+                item,
+                side: ItemSide::Front,
+            },
+            Axis::Y,
+            0,
+        );
+        assert_eq!(
+            solve(&doc),
+            Err(SolveError::WrongAxis {
+                constraint: uid(3, 7)
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wall_mounted_back_edge_is_the_wall_face() -> Result<(), SolveError> {
+        let mut doc = base();
+        fixed(&mut doc, 1, node(1), Axis::X, 0);
+        let item = put(&mut doc, 1, on_wall(WallSide::Right, 60, 48), (0, 0));
+        // The item's back lies on the wall's right face (line - 2); put it at y = 10.
+        fixed(
+            &mut doc,
+            2,
+            Reference::ItemEdge {
+                item,
+                side: ItemSide::Back,
+            },
+            Axis::Y,
+            10,
+        );
+        let s = solve(&doc)?;
+        assert_eq!(
+            s.nodes.get(&uid(1, 1)).map(|p| p.y.nanometers() / IN),
+            Some(12)
+        );
+        assert_eq!(center(&s, item), Some((60, -2)));
+        Ok(())
+    }
+
+    #[test]
+    fn ceiling_items_are_free_like_floor_items() -> Result<(), SolveError> {
+        let mut doc = anchored(0);
+        let light = put(
+            &mut doc,
+            1,
+            Placement::CeilingMounted {
+                x: len(0).into_sourced(),
+                y: len(0).into_sourced(),
+            },
+            (80, 90),
+        );
+        fixed(
+            &mut doc,
+            4,
+            Reference::ItemCenter { item: light },
+            Axis::X,
+            120,
+        );
+        assert_eq!(center(&solve(&doc)?, light), Some((120, 90)));
+        Ok(())
+    }
+
+    trait IntoSourced {
+        fn into_sourced(self) -> Sourced<Length>;
+    }
+
+    impl IntoSourced for Length {
+        fn into_sourced(self) -> Sourced<Length> {
+            Sourced {
+                value: self,
+                source: Source::UserStated,
             }
         }
     }

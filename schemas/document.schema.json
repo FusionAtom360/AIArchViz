@@ -890,6 +890,10 @@
       "additionalProperties": false,
       "description": "A placed object (IfcFurniture, IfcBuildingElementProxy, IfcLightFixture).",
       "properties": {
+        "center": {
+          "$ref": "#/$defs/Point",
+          "description": "Solved footprint center in plan. Derived and stored (Q-7, Q-31)."
+        },
         "clearance": {
           "$ref": "#/$defs/Clearance"
         },
@@ -913,6 +917,10 @@
             }
           ]
         },
+        "overlap_allowed": {
+          "description": "May overlap walls and other occurrences without a violation (7.7, Q-32).",
+          "type": "boolean"
+        },
         "placement": {
           "$ref": "#/$defs/Placement"
         },
@@ -926,7 +934,9 @@
         "element_type",
         "placement",
         "clearance",
-        "fixed"
+        "fixed",
+        "overlap_allowed",
+        "center"
       ],
       "type": "object"
     },
@@ -1781,8 +1791,18 @@
           "type": "string"
         },
         {
+          "const": "clearance_zone",
+          "description": "A clearance zone is blocked by a wall or another occurrence (Q-32).",
+          "type": "string"
+        },
+        {
+          "const": "min_clearance",
+          "description": "A MinClearance constraint is not met after solving (7.1, Q-32).",
+          "type": "string"
+        },
+        {
           "const": "occurrence_overlap",
-          "description": "Reserved: checked from T-111 on (Q-27).",
+          "description": "An occurrence overlaps a wall or another occurrence (Q-27, Q-32).",
           "type": "string"
         }
       ]

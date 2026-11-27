@@ -6,6 +6,7 @@ mod defaults;
 mod document;
 mod geometry;
 mod identity;
+mod items;
 mod length;
 mod log;
 mod solver;
@@ -25,6 +26,7 @@ pub use geometry::{
     opening_violations, update_joins, wall_geometry, wall_profiles,
 };
 pub use identity::{Label, LabelAllocator, LabelError, PROJECT_NAMESPACE, Uuid};
+pub use items::{Rect, clearance_zone, footprint, height_range, proxy_box};
 pub use length::{Length, LengthError};
 pub use log::{Event, History, LogEntry, LogError, Snapshot, log_from_jsonl, log_to_jsonl};
 pub use solver::{
