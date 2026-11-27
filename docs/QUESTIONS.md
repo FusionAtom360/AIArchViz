@@ -189,3 +189,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Choices: areas are exact i128 square nanometers (an i64 holds at most about 9.2e18 nm², which is only about 9.2 m² or 99 sq ft); boundaries are listed counterclockwise from the vertex with the lowest x, then lowest y, with collinear vertices removed; an explicit polygon must have at least 4 vertices, axis-aligned edges, positive area and no self-intersection or touching edges; a slab or ceiling from a space uses the space boundary unchanged (the room side of the wall faces); only walls on the space's storey bound it; the derived boundary is written to Space.boundary by an update function (Q-7).
 - Recommendation: accept as listed.
 - Answer: accepted as listed (owner, 2026-11-26).
+
+## Q-27: The occurrence-overlap invariant before occurrences have footprints (T-110, status: answered)
+- Context: 7.7's last invariant is "no Occurrence footprint overlaps a wall or another Occurrence unless marked as intentionally overlapping". T-110 depends on T-107 to T-109 only; occurrence placement geometry (what a Floor placement's x, y mean, wall-mounted depth, rotation) and any "intentionally overlapping" mark come in T-111. The document has no such mark yet.
+- Options: (a) T-110 implements the other four invariants and reserves the violation kind `OccurrenceOverlap`; T-111 defines occurrence footprints, adds the `overlap_allowed` flag and the check with its test; (b) T-110 defines occurrence footprints now (Floor x, y as the footprint center, rotation by quarter turns, declared width and depth) and adds `overlap_allowed`, leaving wall-mounted footprints to T-111.
+- Recommendation: (a). Footprint geometry belongs to T-111, whose Done when already covers rechecking items; defining it twice risks two definitions.
+- Answer: (a) defer the occurrence check to T-111; the kind is reserved (owner, 2026-11-26).
+
+## Q-28: Where an acknowledgment lives (T-110, status: answered)
+- Context: violations "block commit unless the user marks them Acknowledged". Violations are computed, so the mark must be stored and must name the violation it covers.
+- Options: (a) every violation has a key: its kind plus the sorted ids of the entities involved; the document stores `acknowledged`, a sorted set of keys; a violation whose key is in the set is reported with `acknowledged: true` and does not block; the mark stays while the same entities keep the same kind of violation and is dropped from the set when that violation no longer occurs (an update function prunes it); (b) the key also includes the violation's measured amount, so any change requires a new acknowledgment; (c) acknowledgments live in the proposal, not the document.
+- Recommendation: (a). The key is stable across solves, the document records the decision, and pruning keeps old marks from silently covering a later, unrelated violation of the same entities.
+- Answer: (a) key set in the document, pruned when the violation is gone (owner, 2026-11-26).
+
+## Q-29: What counts as overlapping walls and a declared join (T-110, status: answered)
+- Context: 7.7: "no two walls overlap or cross unless they form a declared join".
+- Options: (a) two walls form a declared join when they share a node; any other two walls on the same storey violate if their exact footprints share area (touching along an edge or at a point is allowed); a wall that fails "positive length" (nodes not ordered along its direction, or zero length) is reported and left out of the other geometric checks, along with openings it hosts, so one bad wall does not hide everything else; Space and Slab outlines that cannot be derived or are not simple rectilinear polygons are reported with the reason; (b) also flag walls sharing a node that overlap beyond their join.
+- Recommendation: (a). With orthogonal walls, two walls that share a node can only meet at that node (same-direction walls at a node are already an error), so (b) adds nothing.
+- Answer: (a) as listed (owner, 2026-11-26).

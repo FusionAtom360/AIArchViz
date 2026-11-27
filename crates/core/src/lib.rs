@@ -11,6 +11,7 @@ mod log;
 mod solver;
 mod space;
 mod units;
+mod validity;
 
 pub use canonical::{CanonicalError, document_schema_json, from_canonical_json, to_canonical_json};
 pub use command::{
@@ -37,3 +38,4 @@ pub use units::{
     GRID_NM, InputContext, InputRounding, ParseError, ParsedLength, ProjectUnit, echo_length,
     format_length, parse_length,
 };
+pub use validity::{Detail, Violation, blocks_commit, prune_acknowledged, validate};

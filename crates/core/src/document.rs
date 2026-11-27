@@ -16,7 +16,7 @@
 //! The canonical JSON form is written by `canonical::to_canonical_json`.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
@@ -807,6 +807,35 @@ pub struct CameraBookmark {
     pub heading: Millidegrees,
 }
 
+/// What a validity violation is about (7.7).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ViolationKind {
+    /// A wall without positive length along its direction.
+    WallLength,
+    /// Two walls overlap without a declared join.
+    WallOverlap,
+    /// An opening is not fully inside its host.
+    OpeningOutsideHost,
+    /// A Space boundary is not a simple rectilinear polygon.
+    SpaceOutline,
+    /// A Slab boundary is not a simple rectilinear polygon.
+    SlabOutline,
+    /// Reserved: checked from T-111 on (Q-27).
+    OccurrenceOverlap,
+}
+
+/// Identifies a violation across solves: its kind and the sorted ids of the
+/// entities involved (Q-28).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViolationKey {
+    pub kind: ViolationKind,
+    pub entities: Vec<Uuid>,
+}
+
 /// The whole project document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -836,6 +865,8 @@ pub struct Document {
     pub default_walk_start: Option<Uuid>,
     /// Label counters, so labels are never reused across save and load (5.5).
     pub labels: LabelAllocator,
+    /// Violations the user has marked Acknowledged (7.7, Q-28).
+    pub acknowledged: BTreeSet<ViolationKey>,
 }
 
 impl Document {
@@ -866,6 +897,7 @@ impl Document {
             camera_bookmarks: BTreeMap::new(),
             default_walk_start: None,
             labels: LabelAllocator::new(),
+            acknowledged: BTreeSet::new(),
         }
     }
 }

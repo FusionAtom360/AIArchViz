@@ -697,6 +697,10 @@ mod tests {
             },
         );
         doc.default_walk_start = Some(start);
+        doc.acknowledged.insert(ViolationKey {
+            kind: ViolationKind::OpeningOutsideHost,
+            entities: vec![door],
+        });
         doc.labels = labels;
         doc
     }

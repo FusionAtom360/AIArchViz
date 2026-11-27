@@ -1732,6 +1732,61 @@
       ],
       "type": "object"
     },
+    "ViolationKey": {
+      "additionalProperties": false,
+      "description": "Identifies a violation across solves: its kind and the sorted ids of the\nentities involved (Q-28).",
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ViolationKind"
+        }
+      },
+      "required": [
+        "kind",
+        "entities"
+      ],
+      "type": "object"
+    },
+    "ViolationKind": {
+      "description": "What a validity violation is about (7.7).",
+      "oneOf": [
+        {
+          "const": "wall_length",
+          "description": "A wall without positive length along its direction.",
+          "type": "string"
+        },
+        {
+          "const": "wall_overlap",
+          "description": "Two walls overlap without a declared join.",
+          "type": "string"
+        },
+        {
+          "const": "opening_outside_host",
+          "description": "An opening is not fully inside its host.",
+          "type": "string"
+        },
+        {
+          "const": "space_outline",
+          "description": "A Space boundary is not a simple rectilinear polygon.",
+          "type": "string"
+        },
+        {
+          "const": "slab_outline",
+          "description": "A Slab boundary is not a simple rectilinear polygon.",
+          "type": "string"
+        },
+        {
+          "const": "occurrence_overlap",
+          "description": "Reserved: checked from T-111 on (Q-27).",
+          "type": "string"
+        }
+      ]
+    },
     "Wall": {
       "additionalProperties": false,
       "description": "A wall (IfcWall).",
@@ -1839,6 +1894,14 @@
   "additionalProperties": false,
   "description": "The whole project document.",
   "properties": {
+    "acknowledged": {
+      "description": "Violations the user has marked Acknowledged (7.7, Q-28).",
+      "items": {
+        "$ref": "#/$defs/ViolationKey"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
     "assets": {
       "additionalProperties": {
         "$ref": "#/$defs/Asset"
@@ -2002,7 +2065,8 @@
     "roofs",
     "underlays",
     "camera_bookmarks",
-    "labels"
+    "labels",
+    "acknowledged"
   ],
   "title": "Document",
   "type": "object"
