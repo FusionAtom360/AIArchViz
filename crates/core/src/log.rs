@@ -375,13 +375,13 @@ mod tests {
         let mut h = History::new(genesis());
         let failing = commit(vec![
             cmd(1, create_node(0, 0)),
-            cmd(2, Action::CreateWall(NoArgs {})),
+            cmd(2, Action::RemoveConstraint(NoArgs {})),
         ]);
         assert_eq!(
             h.apply_entry(&entry(1, failing)),
             Err(LogError::Command {
                 index: 1,
-                error: CommandError::NotYetImplemented("create_wall")
+                error: CommandError::NotYetImplemented("remove_constraint")
             })
         );
         assert_eq!(bytes(h.document()), bytes(&genesis()));

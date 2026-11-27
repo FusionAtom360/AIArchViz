@@ -3,6 +3,7 @@
 mod canonical;
 mod clearance;
 mod command;
+mod create;
 mod defaults;
 mod document;
 mod edit;
@@ -28,10 +29,14 @@ pub use command::{
     MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
     SetVariantSelection, apply,
 };
+pub use create::{
+    AddConstraint, CreateCeiling, CreateDatum, CreateElementType, CreateMaterial, CreateRoof,
+    CreateSlab, CreateSpace, CreateWall, PlaceOccurrence, catalog_materials,
+};
 pub use defaults::{
     CATALOG_VERSION, CEILING_HEIGHT, CEILING_THICKNESS, CLEARANCE, EAVE_OVERHANG, EYE_HEIGHT,
-    FASCIA_DEPTH, FLOOR_TO_FLOOR, MIN_JAMB_DISTANCE, OpeningSize, ROOF_THICKNESS, SLAB_THICKNESS,
-    WALL_BASE_OFFSET, interior_wall, opening_size, proposed,
+    FASCIA_DEPTH, FLOOR_TO_FLOOR, MEASURED_TOLERANCE, MIN_JAMB_DISTANCE, OpeningSize,
+    ROOF_THICKNESS, SLAB_THICKNESS, WALL_BASE_OFFSET, interior_wall, opening_size, proposed,
 };
 pub use document::*;
 pub use edit::{Candidate, Case, MoveError, MoveOutcome};

@@ -31,3 +31,11 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Result: 0 errors, 0 warnings, 0 infos, 0 hints; 12 draw calls, 492 vertices, 252 triangles.
 - Rationale: answers T-119's Done when with the reference validator without adding Node to the Rust build.
 - Status: approved (owner, Q-56, 2026-11-26)
+
+## DEC-3: Creation commands beyond the 8.2 set
+- Date: 2026-11-26
+- Task or spike: T-120b (Q-60, Q-66)
+- Spec section: 8.2
+- Decision: add CreateDatum, CreateMaterial, CreateSpace, CreateSlab, CreateCeiling, CreateRoof and CreateElementType to the v1 command set, with the arguments of Q-66. 8.2 lists no command that creates these entities, so without them a model cannot be built through the command API, as T-121 requires.
+- Rationale: every change goes through commands (8.1, P2); these fill a gap in 8.2 without changing any existing command.
+- Status: approved (owner, Q-66, 2026-11-26)

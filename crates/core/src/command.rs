@@ -6,8 +6,9 @@
 //!
 //! T-105 implements the commands that are pure data edits (Q-9): CreateNode,
 //! SetStorey, SetVariantSelection and SetProjectUnits; T-108 adds
-//! CreateOpening (Q-23). Every other v1
-//! command parses with empty `args` and returns
+//! CreateOpening (Q-23); T-120b adds CreateWall, AddConstraint,
+//! PlaceOccurrence and the creation commands of DEC-3 (module `create`).
+//! Every other v1 command parses with empty `args` and returns
 //! [`CommandError::NotYetImplemented`]; its arguments are defined by the task
 //! that implements it.
 
@@ -16,6 +17,10 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::create::{
+    self, AddConstraint, CreateCeiling, CreateDatum, CreateElementType, CreateMaterial, CreateRoof,
+    CreateSlab, CreateSpace, CreateWall, PlaceOccurrence,
+};
 use crate::document::{
     Axis, ConstraintKind, Document, JoinType, Layer, LayerSet, Node, Opening, OpeningEdge,
     OpeningKind, Placement, Reference, Source, Sourced, Storey,
@@ -194,18 +199,18 @@ pub struct SetProjectUnits {
 )]
 pub enum Action {
     CreateNode(CreateNode),
-    CreateWall(NoArgs),
+    CreateWall(CreateWall),
     SplitWall(NoArgs),
     MergeWalls(NoArgs),
     SetWallLayers(SetWallLayers),
     MoveWall(MoveWall),
     CreateOpening(CreateOpening),
     MoveOpening(MoveOpening),
-    PlaceOccurrence(NoArgs),
+    PlaceOccurrence(PlaceOccurrence),
     MoveOccurrence(MoveOccurrence),
     RotateOccurrence(NoArgs),
     DeleteEntity(NoArgs),
-    AddConstraint(NoArgs),
+    AddConstraint(AddConstraint),
     RemoveConstraint(NoArgs),
     SetConstraintValue(SetConstraintValue),
     SetStorey(SetStorey),
@@ -213,6 +218,13 @@ pub enum Action {
     RemoveOperator(NoArgs),
     SetVariantSelection(SetVariantSelection),
     SetProjectUnits(SetProjectUnits),
+    CreateDatum(CreateDatum),
+    CreateMaterial(CreateMaterial),
+    CreateSpace(CreateSpace),
+    CreateSlab(CreateSlab),
+    CreateCeiling(CreateCeiling),
+    CreateRoof(CreateRoof),
+    CreateElementType(CreateElementType),
 }
 
 impl Action {
@@ -239,6 +251,13 @@ impl Action {
             Action::RemoveOperator(_) => "remove_operator",
             Action::SetVariantSelection(_) => "set_variant_selection",
             Action::SetProjectUnits(_) => "set_project_units",
+            Action::CreateDatum(_) => "create_datum",
+            Action::CreateMaterial(_) => "create_material",
+            Action::CreateSpace(_) => "create_space",
+            Action::CreateSlab(_) => "create_slab",
+            Action::CreateCeiling(_) => "create_ceiling",
+            Action::CreateRoof(_) => "create_roof",
+            Action::CreateElementType(_) => "create_element_type",
         }
     }
 }
@@ -334,6 +353,8 @@ pub enum CommandError {
     /// The target is not a dimension that can be set (an Align, an Equal, a
     /// floor item's offset, and so on).
     NotADimension(Uuid),
+    /// The arguments contradict each other or a rule of the model (Q-66).
+    InvalidArguments(String),
 }
 
 impl fmt::Display for CommandError {
@@ -347,6 +368,7 @@ impl fmt::Display for CommandError {
                 write!(f, "{kind} must be resolved through propose")
             }
             CommandError::NotADimension(id) => write!(f, "{id} has no settable dimension"),
+            CommandError::InvalidArguments(text) => write!(f, "invalid arguments: {text}"),
             CommandError::InvalidOption { slot, option } => {
                 write!(f, "{option} is not an option of variant slot {slot}")
             }
@@ -558,6 +580,18 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
             {
                 o.start = *start;
             }
+        }
+        Action::CreateWall(args) => create::create_wall(&mut doc, args, new_id)?,
+        Action::AddConstraint(args) => create::add_constraint(&mut doc, args, new_id(0))?,
+        Action::PlaceOccurrence(args) => create::place_occurrence(&mut doc, args, new_id(0))?,
+        Action::CreateDatum(args) => create::create_datum(&mut doc, args, new_id(0))?,
+        Action::CreateMaterial(args) => create::create_material(&mut doc, args, new_id(0))?,
+        Action::CreateSpace(args) => create::create_space(&mut doc, args, new_id(0))?,
+        Action::CreateSlab(args) => create::create_slab(&mut doc, args, new_id(0))?,
+        Action::CreateCeiling(args) => create::create_ceiling(&mut doc, args, new_id(0))?,
+        Action::CreateRoof(args) => create::create_roof(&mut doc, args, new_id(0))?,
+        Action::CreateElementType(args) => {
+            create::create_element_type(&mut doc, args, new_id(0))?;
         }
         other => return Err(CommandError::NotYetImplemented(other.kind())),
     }
@@ -874,13 +908,10 @@ pub(crate) mod tests {
     fn unimplemented_actions() -> Vec<Action> {
         let n = || NoArgs {};
         vec![
-            Action::CreateWall(n()),
             Action::SplitWall(n()),
             Action::MergeWalls(n()),
-            Action::PlaceOccurrence(n()),
             Action::RotateOccurrence(n()),
             Action::DeleteEntity(n()),
-            Action::AddConstraint(n()),
             Action::RemoveConstraint(n()),
             Action::ApplyOperator(n()),
             Action::RemoveOperator(n()),
@@ -890,7 +921,7 @@ pub(crate) mod tests {
     #[test]
     fn the_rest_of_the_v1_set_is_not_yet_implemented() {
         let actions = unimplemented_actions();
-        assert_eq!(actions.len() + 10, 20, "8.2 lists 20 commands");
+        assert_eq!(actions.len() + 13, 20, "8.2 lists 20 commands");
         for action in actions {
             let kind = action.kind();
             assert_eq!(

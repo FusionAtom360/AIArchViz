@@ -1,5 +1,45 @@
 {
   "$defs": {
+    "AddConstraint": {
+      "additionalProperties": false,
+      "description": "Adds a constraint (7.1, Q-66).",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ConstraintKind"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConstraintStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null is driving."
+        }
+      },
+      "required": [
+        "kind",
+        "source"
+      ],
+      "type": "object"
+    },
     "Ambiguity": {
       "description": "An unresolved choice (9.2): {kind, candidates, default if any}. Each\ncandidate names the dimension it is about, with its resulting edits and\nwhat moves.",
       "properties": {
@@ -40,6 +80,18 @@
       ],
       "type": "string"
     },
+    "Authority": {
+      "description": "Dimension authority, highest first (D-11).",
+      "enum": [
+        "user_stated_exact",
+        "manufacturer_spec",
+        "cad_derived",
+        "measured_with_tolerance",
+        "proposed_default",
+        "mesh_derived"
+      ],
+      "type": "string"
+    },
     "Axis": {
       "description": "A plan axis.",
       "enum": [
@@ -47,6 +99,48 @@
         "y"
       ],
       "type": "string"
+    },
+    "Boundary": {
+      "description": "A rectilinear boundary given explicitly or taken from a space.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "points": {
+              "items": {
+                "$ref": "#/$defs/Point"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "from_space",
+              "type": "string"
+            },
+            "space": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "space"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Candidate": {
       "description": "One way to resolve a move, with its resulting dimensions.",
@@ -84,6 +178,31 @@
         "changed"
       ],
       "type": "string"
+    },
+    "Clearance": {
+      "additionalProperties": false,
+      "description": "Clearance zone extents around a footprint (Q-8).",
+      "properties": {
+        "back": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "front": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "left": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "right": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "object"
     },
     "CliError": {
       "description": "A failed request.",
@@ -134,7 +253,7 @@
           "additionalProperties": false,
           "properties": {
             "args": {
-              "$ref": "#/$defs/NoArgs"
+              "$ref": "#/$defs/CreateWall"
             },
             "id": {
               "$ref": "#/$defs/Uuid"
@@ -309,7 +428,7 @@
           "additionalProperties": false,
           "properties": {
             "args": {
-              "$ref": "#/$defs/NoArgs"
+              "$ref": "#/$defs/PlaceOccurrence"
             },
             "id": {
               "$ref": "#/$defs/Uuid"
@@ -409,7 +528,7 @@
           "additionalProperties": false,
           "properties": {
             "args": {
-              "$ref": "#/$defs/NoArgs"
+              "$ref": "#/$defs/AddConstraint"
             },
             "id": {
               "$ref": "#/$defs/Uuid"
@@ -604,6 +723,181 @@
             "idempotency_key"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateDatum"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_datum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateMaterial"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_material",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateSpace"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_space",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateSlab"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_slab",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateCeiling"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_ceiling",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateRoof"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_roof",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateElementType"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_element_type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -660,6 +954,150 @@
       ],
       "type": "object"
     },
+    "ConstraintKind": {
+      "description": "Constraint kinds (7.1).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "coordinate(b) - coordinate(a) = value along `axis` (signed, Q-13).",
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/Reference"
+            },
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "b": {
+              "$ref": "#/$defs/Reference"
+            },
+            "kind": {
+              "const": "distance",
+              "type": "string"
+            },
+            "tolerance": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Length"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "a",
+            "b",
+            "axis",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/Reference"
+            },
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "b": {
+              "$ref": "#/$defs/Reference"
+            },
+            "kind": {
+              "const": "align",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "a",
+            "b",
+            "axis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Two Distance constraints, by id, have equal values.",
+          "properties": {
+            "first": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "equal",
+              "type": "string"
+            },
+            "second": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "first",
+            "second"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The reference's coordinate on `axis` equals `value` (Q-13).",
+          "properties": {
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "kind": {
+              "const": "fixed",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "axis",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Checked after solving, not solved (7.1).",
+          "properties": {
+            "kind": {
+              "const": "min_clearance",
+              "type": "string"
+            },
+            "object": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "other": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "value": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "object",
+            "other",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ConstraintReport": {
       "description": "The solver's report for one constraint.",
       "properties": {
@@ -713,6 +1151,146 @@
       },
       "required": [
         "outcome"
+      ],
+      "type": "object"
+    },
+    "ConstraintStatus": {
+      "description": "Driving or Reference (7.2).",
+      "enum": [
+        "driving",
+        "reference"
+      ],
+      "type": "string"
+    },
+    "CreateCeiling": {
+      "additionalProperties": false,
+      "description": "Creates a ceiling (DEC-3).",
+      "properties": {
+        "boundary": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "elevation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null is the storey's default ceiling height."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "storey",
+        "boundary"
+      ],
+      "type": "object"
+    },
+    "CreateDatum": {
+      "additionalProperties": false,
+      "description": "Creates a datum (DEC-3).",
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/DatumGeometry"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "CreateElementType": {
+      "additionalProperties": false,
+      "description": "Creates an element type without a model (DEC-3).",
+      "properties": {
+        "declared_dimensions": {
+          "$ref": "#/$defs/DeclaredDimensions"
+        },
+        "fidelity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fidelity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null is proxy."
+        },
+        "license": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyValue"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "declared_dimensions",
+        "source",
+        "license"
+      ],
+      "type": "object"
+    },
+    "CreateMaterial": {
+      "additionalProperties": false,
+      "description": "Creates a material (DEC-3).",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyValue"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "tile_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     },
@@ -789,6 +1367,358 @@
         "reference",
         "anchor",
         "offset"
+      ],
+      "type": "object"
+    },
+    "CreateRoof": {
+      "additionalProperties": false,
+      "description": "Creates a shed roof (6.5, DEC-3).",
+      "properties": {
+        "fascia_depth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "footprint": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "high_edge_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "ledger": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "low_edge_height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "material_slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "overhang": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Overhang"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pitch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced3"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "slope_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Direction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required without a ledger; derived with one, so then null."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "storey",
+        "footprint",
+        "high_edge_height"
+      ],
+      "type": "object"
+    },
+    "CreateSlab": {
+      "additionalProperties": false,
+      "description": "Creates a floor slab (DEC-3).",
+      "properties": {
+        "boundary": {
+          "$ref": "#/$defs/Boundary"
+        },
+        "elevation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null is 0: the slab top at the storey floor."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "storey",
+        "boundary"
+      ],
+      "type": "object"
+    },
+    "CreateSpace": {
+      "additionalProperties": false,
+      "description": "Creates a space; its boundary is derived at commit (Q-24, DEC-3).",
+      "properties": {
+        "finishes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finishes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "seed": {
+          "$ref": "#/$defs/Point"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "storey",
+        "name",
+        "seed"
+      ],
+      "type": "object"
+    },
+    "CreateWall": {
+      "additionalProperties": false,
+      "description": "Creates a wall between two existing nodes (6.1, Q-66).",
+      "properties": {
+        "base_offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction",
+          "description": "From node_a to node_b (Q-12)."
+        },
+        "function": {
+          "$ref": "#/$defs/Function"
+        },
+        "join_priority": {
+          "default": null,
+          "description": "Null is 0; ties go to the lowest wall id.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "layers": {
+          "default": null,
+          "description": "Left to right; null takes the catalog interior stud wall.",
+          "items": {
+            "$ref": "#/$defs/Layer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "left_extent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required with `layers`; null with the catalog wall takes its value."
+        },
+        "node_a": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "node_b": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "top": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallTop"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null is the storey's floor-to-floor height."
+        }
+      },
+      "required": [
+        "storey",
+        "node_a",
+        "node_b",
+        "direction",
+        "function"
+      ],
+      "type": "object"
+    },
+    "DatumGeometry": {
+      "description": "The shape of a datum.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A point; anchors both axes.",
+          "properties": {
+            "kind": {
+              "const": "point",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Length"
+            },
+            "y": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The line x = constant; anchors the X axis.",
+          "properties": {
+            "kind": {
+              "const": "x_line",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "x"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The line y = constant; anchors the Y axis.",
+          "properties": {
+            "kind": {
+              "const": "y_line",
+              "type": "string"
+            },
+            "y": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "y"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DeclaredDimensions": {
+      "additionalProperties": false,
+      "description": "Declared footprint and height of an element type (10.2).",
+      "properties": {
+        "authority": {
+          "$ref": "#/$defs/Authority"
+        },
+        "depth": {
+          "$ref": "#/$defs/Length"
+        },
+        "height": {
+          "$ref": "#/$defs/Length"
+        },
+        "width": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "width",
+        "depth",
+        "height",
+        "authority"
       ],
       "type": "object"
     },
@@ -1064,6 +1994,16 @@
         }
       ]
     },
+    "Direction": {
+      "description": "A compass direction along a plan axis.",
+      "enum": [
+        "pos_x",
+        "neg_x",
+        "pos_y",
+        "neg_y"
+      ],
+      "type": "string"
+    },
     "ErrorCode": {
       "description": "Stable error codes (Q-50). Never change a code's meaning once released.",
       "enum": [
@@ -1134,6 +2074,53 @@
         }
       ]
     },
+    "Fidelity": {
+      "description": "Asset fidelity tiers (10.1).",
+      "enum": [
+        "exact",
+        "library",
+        "generated",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "Finishes": {
+      "additionalProperties": false,
+      "description": "Finish materials of a space.",
+      "properties": {
+        "ceiling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "walls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "Flag": {
       "description": "Something the user should notice before confirming (Q-36).",
       "oneOf": [
@@ -1198,6 +2185,15 @@
           "type": "object"
         }
       ]
+    },
+    "Function": {
+      "description": "Whether an element exists, is new work, or is to be removed (6.7).",
+      "enum": [
+        "existing",
+        "new",
+        "demolished"
+      ],
+      "type": "string"
     },
     "GeometryError": {
       "description": "Why wall geometry cannot be built.",
@@ -1306,6 +2302,46 @@
       "description": "A length in nanometers.",
       "format": "int64",
       "type": "integer"
+    },
+    "Light": {
+      "additionalProperties": false,
+      "description": "Light data of a light-fixture occurrence (Q-6, 11.3, 12.4).",
+      "properties": {
+        "ies": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kelvin": {
+          "$ref": "#/$defs/Sourced2"
+        },
+        "kind": {
+          "$ref": "#/$defs/LightKind"
+        },
+        "lumens": {
+          "$ref": "#/$defs/Sourced2"
+        }
+      },
+      "required": [
+        "kind",
+        "lumens",
+        "kelvin"
+      ],
+      "type": "object"
+    },
+    "LightKind": {
+      "description": "Light emitter kinds (11.3).",
+      "enum": [
+        "point",
+        "spot",
+        "rect"
+      ],
+      "type": "string"
     },
     "LogEntry": {
       "additionalProperties": false,
@@ -1642,6 +2678,209 @@
         }
       ]
     },
+    "Overhang": {
+      "additionalProperties": false,
+      "description": "Eave overhang per compass side, applied to every footprint edge facing\nthat way (Q-8).",
+      "properties": {
+        "neg_x": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "neg_y": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pos_x": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pos_y": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "pos_x",
+        "neg_x",
+        "pos_y",
+        "neg_y"
+      ],
+      "type": "object"
+    },
+    "Pitch": {
+      "additionalProperties": false,
+      "description": "Roof pitch as rise over run, e.g. 3:12.",
+      "properties": {
+        "rise": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rise",
+        "run"
+      ],
+      "type": "object"
+    },
+    "PlaceOccurrence": {
+      "additionalProperties": false,
+      "description": "Places an occurrence of an element type (6.3, Q-66).",
+      "properties": {
+        "clearance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Clearance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Null takes the catalog clearance on every side."
+        },
+        "element_type": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "fixed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "light": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Light"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "overlap_allowed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "placement": {
+          "$ref": "#/$defs/Placement"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "storey",
+        "element_type",
+        "placement"
+      ],
+      "type": "object"
+    },
+    "Placement": {
+      "description": "How an occurrence is placed (6.3).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "elevation": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "floor",
+              "type": "string"
+            },
+            "rotation": {
+              "$ref": "#/$defs/QuarterTurns"
+            },
+            "x": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "y": {
+              "$ref": "#/$defs/Sourced"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y",
+            "rotation",
+            "elevation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "elevation": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "wall_mounted",
+              "type": "string"
+            },
+            "offset": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "side": {
+              "$ref": "#/$defs/WallSide"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall",
+            "side",
+            "reference",
+            "offset",
+            "elevation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ceiling_mounted",
+              "type": "string"
+            },
+            "x": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "y": {
+              "$ref": "#/$defs/Sourced"
+            }
+          },
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Point": {
+      "additionalProperties": false,
+      "description": "A point in plan.",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
     "PolygonError": {
       "description": "Why a polygon is not a simple rectilinear polygon.",
       "oneOf": [
@@ -1713,6 +2952,60 @@
         "feet"
       ],
       "type": "string"
+    },
+    "PropertyValue": {
+      "description": "Free-form property values: no decimals (Q-8).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "string": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "string"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "integer": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "integer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "boolean"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "length": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "length"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Proposal": {
       "description": "The result of `propose` (8.3).",
@@ -1847,6 +3140,21 @@
           "type": "object"
         }
       ]
+    },
+    "Provenance": {
+      "description": "How a value entered beyond its source (6.6).",
+      "oneOf": [
+        {
+          "const": "transcribed",
+          "description": "Read from the underlay of the paper plan.",
+          "type": "string"
+        }
+      ]
+    },
+    "QuarterTurns": {
+      "maximum": 3,
+      "minimum": 0,
+      "type": "integer"
     },
     "Reference": {
       "description": "A geometric reference that dimensions and constraints name (6.2).",
@@ -2300,6 +3608,42 @@
       ],
       "type": "object"
     },
+    "Sourced2": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Sourced3": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Pitch"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
     "SpaceError": {
       "description": "Why a space, slab or ceiling outline cannot be found.",
       "oneOf": [
@@ -2543,6 +3887,43 @@
         "right"
       ],
       "type": "string"
+    },
+    "WallTop": {
+      "description": "Where a wall's top is.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The storey's floor-to-floor height.",
+          "properties": {
+            "kind": {
+              "const": "storey",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An explicit height above the wall's base.",
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/Sourced"
+            },
+            "kind": {
+              "const": "height",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "height"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

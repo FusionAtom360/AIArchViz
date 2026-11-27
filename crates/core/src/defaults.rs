@@ -39,6 +39,9 @@ pub const FASCIA_DEPTH: Length = Length::from_nanometers(6 * IN);
 /// Shed roof eave overhang on every side: 12".
 pub const EAVE_OVERHANG: Length = Length::from_nanometers(12 * IN);
 
+/// Tolerance of a Measured constraint that states none (7.5): 1/4 in.
+pub const MEASURED_TOLERANCE: Length = Length::from_nanometers(IN / 4);
+
 /// `value` as a catalog default: source Proposed.
 pub const fn proposed(value: Length) -> Sourced<Length> {
     Sourced {

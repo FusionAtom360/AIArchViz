@@ -57,7 +57,7 @@ impl Default for LayerA {
     /// A default tolerance of 1/4 in.
     fn default() -> Self {
         LayerA {
-            default_tolerance: Length::from_nanometers(6_350_000),
+            default_tolerance: crate::defaults::MEASURED_TOLERANCE,
         }
     }
 }

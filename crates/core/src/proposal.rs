@@ -260,27 +260,47 @@ impl fmt::Display for CommitError {
 impl std::error::Error for CommitError {}
 
 /// Fills every value a command leaves to defaults, so it is explicit (8.3).
-fn resolve(command: &Command) -> Command {
+/// Arguments that cannot be filled are left as they are; `apply` reports them.
+fn resolve(document: &Document, command: &Command) -> Command {
+    use crate::create;
     let mut c = command.clone();
-    if let Action::CreateOpening(args) = &mut c.action {
-        let d = opening_size(args.kind);
-        let fill = |v: &mut Option<Sourced<Length>>, value| {
-            if v.is_none() {
-                *v = Some(Sourced {
-                    value,
-                    source: Source::Proposed,
-                });
-            }
-        };
-        let CreateOpening {
-            width,
-            height,
-            sill,
-            ..
-        } = args;
-        fill(width, d.width);
-        fill(height, d.height);
-        fill(sill, d.sill);
+    match &mut c.action {
+        Action::CreateOpening(args) => {
+            let d = opening_size(args.kind);
+            let fill = |v: &mut Option<Sourced<Length>>, value| {
+                if v.is_none() {
+                    *v = Some(Sourced {
+                        value,
+                        source: Source::Proposed,
+                    });
+                }
+            };
+            let CreateOpening {
+                width,
+                height,
+                sill,
+                ..
+            } = args;
+            fill(width, d.width);
+            fill(height, d.height);
+            fill(sill, d.sill);
+        }
+        Action::CreateWall(args) => {
+            let _ = create::fill_wall(document, args);
+        }
+        Action::AddConstraint(args) => {
+            let _ = create::fill_constraint(args);
+        }
+        Action::PlaceOccurrence(args) => create::fill_occurrence(args),
+        Action::CreateSlab(args) => create::fill_slab(args),
+        Action::CreateCeiling(args) => {
+            let _ = create::fill_ceiling(document, args);
+        }
+        Action::CreateRoof(args) => {
+            let _ = create::fill_roof(args);
+        }
+        Action::CreateElementType(args) => create::fill_element_type(args),
+        _ => {}
     }
     c
 }
@@ -306,7 +326,7 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
             let mut next = base.clone();
             for (index, c) in commands.iter().enumerate() {
                 let Some(request) = request_for(&next, &c.action) else {
-                    let r = resolve(c);
+                    let r = resolve(&next, c);
                     next =
                         apply(&next, &r).map_err(|error| ProposeError::Command { index, error })?;
                     resolved.push(r);
