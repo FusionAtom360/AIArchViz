@@ -3,12 +3,13 @@
 mod fixtures;
 mod float_lint;
 mod slice;
+mod timing;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: cargo xtask <check | golden | slice>
-  check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
+  check   float lint, fmt, clippy, tests, release solver timing, wasm32 build of core, cargo deny
   golden  regenerate schemas/ (document and cli), fixtures/*/commands.txt and the insta snapshots
   slice   replay fixtures/shop and fixtures/l-room and write their DXF, GLB and Scene Package to target/slice";
 
@@ -55,6 +56,9 @@ fn check() -> Result<(), String> {
         ],
     )?;
     cargo(&root, "test", &["test", "--workspace", "--locked"])?;
+    step("solver timing (release, under 50 ms)", || {
+        timing::step(&root)
+    })?;
     cargo(
         &root,
         "wasm32 build (archviz-core)",
@@ -184,205 +188,6 @@ mod tests {
     };
 
     const CHILD_ENV: &str = "ARCHVIZ_DETERMINISM_CHILD";
-
-    /// T-106: 500 walls (1,000 nodes), each placed from a datum by two
-    /// distances, with its left face fixed or set 1 ft from the face of the
-    /// previous parallel wall: 1,500 constraints in all.
-    fn five_hundred_walls() -> Document {
-        use archviz_core::{
-            Axis, Constraint, ConstraintKind, ConstraintStatus, Datum, DatumGeometry, Direction,
-            Function, JoinType, LabelAllocator, Layer, LayerSet, Node, Reference, Wall, WallSide,
-            WallTop,
-        };
-        let id =
-            |kind: &str, n: usize| Uuid::derive(Uuid::from_bytes([7; 16]), kind, &n.to_string());
-        let ft = |n: i64| Length::from_nanometers(n * 304_800_000);
-        let user = |l: Length| Sourced {
-            value: l,
-            source: Source::UserStated,
-        };
-        let mut doc = Document::new(
-            Project {
-                id: id("project", 0),
-                name: "Bench".into(),
-                default_unit: ProjectUnit::Inches,
-            },
-            Building {
-                id: id("building", 0),
-                name: "Bench".into(),
-            },
-        );
-        let layers = id("layers", 0);
-        doc.layer_sets.insert(
-            layers,
-            LayerSet {
-                name: "Stud".into(),
-                layers: vec![Layer {
-                    material: id("material", 0),
-                    thickness: user(Length::from_nanometers(114_300_000)),
-                    core: true,
-                }],
-            },
-        );
-        let origin = id("datum", 0);
-        doc.datums.insert(
-            origin,
-            Datum {
-                name: "Origin".into(),
-                geometry: DatumGeometry::Point { x: ft(0), y: ft(0) },
-            },
-        );
-        let mut labels = LabelAllocator::new();
-        let constraint = |doc: &mut Document, n: &mut usize, kind| {
-            *n += 1;
-            doc.constraints.insert(
-                id("constraint", *n),
-                Constraint {
-                    kind,
-                    status: ConstraintStatus::Driving,
-                    source: Source::UserStated,
-                    provenance: None,
-                },
-            );
-        };
-        let mut n = 0;
-        let datum = Reference::Datum { datum: origin };
-        for i in 0..500 {
-            let (a, b) = (id("node", 2 * i), id("node", 2 * i + 1));
-            for node in [a, b] {
-                doc.nodes.insert(
-                    node,
-                    Node {
-                        x: ft(0),
-                        y: ft(0),
-                        join: JoinType::Isolated,
-                    },
-                );
-            }
-            let horizontal = i % 2 == 0;
-            let direction = if horizontal {
-                Direction::PosX
-            } else {
-                Direction::PosY
-            };
-            let (along, across) = if horizontal {
-                (Axis::X, Axis::Y)
-            } else {
-                (Axis::Y, Axis::X)
-            };
-            let wall = id("wall", i);
-            let label = labels.allocate("W").unwrap_or_else(|_| unreachable!());
-            doc.walls.insert(
-                wall,
-                Wall {
-                    label,
-                    storey: id("storey", 0),
-                    node_a: a,
-                    node_b: b,
-                    direction,
-                    layer_set: layers,
-                    left_extent: user(Length::from_nanometers(57_150_000)),
-                    base_offset: user(ft(0)),
-                    top: WallTop::Storey,
-                    join_priority: 0,
-                    function: Function::New,
-                },
-            );
-            let offset = i64::try_from(i).unwrap_or(0) * 3;
-            let node_a = Reference::Node { node: a };
-            constraint(
-                &mut doc,
-                &mut n,
-                ConstraintKind::Distance {
-                    a: datum,
-                    b: node_a,
-                    axis: along,
-                    value: ft(offset),
-                    tolerance: None,
-                },
-            );
-            constraint(
-                &mut doc,
-                &mut n,
-                ConstraintKind::Distance {
-                    a: node_a,
-                    b: Reference::Node { node: b },
-                    axis: along,
-                    value: ft(2),
-                    tolerance: None,
-                },
-            );
-            let face = Reference::WallFace {
-                wall,
-                side: WallSide::Left,
-                boundary: 0,
-            };
-            if i < 2 {
-                constraint(
-                    &mut doc,
-                    &mut n,
-                    ConstraintKind::Fixed {
-                        reference: face,
-                        axis: across,
-                        value: ft(0),
-                    },
-                );
-            } else {
-                // Same orientation as wall i - 2: align their left faces, 1 ft apart.
-                let prev = Reference::WallFace {
-                    wall: id("wall", i - 2),
-                    side: WallSide::Left,
-                    boundary: 0,
-                };
-                constraint(
-                    &mut doc,
-                    &mut n,
-                    ConstraintKind::Distance {
-                        a: prev,
-                        b: face,
-                        axis: across,
-                        value: ft(1),
-                        tolerance: None,
-                    },
-                );
-            }
-        }
-        doc
-    }
-
-    /// T-106 Done when: solving 500 elements takes under 50 ms in release mode.
-    /// Run with `cargo test --release -p archviz-xtask solver_500 -- --nocapture`.
-    #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "timing is only meaningful in release builds"
-    )]
-    fn solver_500_elements_under_50_ms() -> Result<(), String> {
-        use archviz_core::{LayerA, Solver};
-        let doc = five_hundred_walls();
-        assert_eq!((doc.walls.len(), doc.nodes.len()), (500, 1000));
-        let solver = LayerA::default();
-        let mut times = Vec::new();
-        let mut last = None;
-        for _ in 0..10 {
-            let start = std::time::Instant::now();
-            let solution = solver.solve(&doc).map_err(|e| e.to_string())?;
-            times.push(start.elapsed());
-            last = Some(solution);
-        }
-        let solution = last.ok_or("no run")?;
-        assert!(solution.conflicts.is_empty() && solution.underconstrained.is_empty());
-        times.sort();
-        println!(
-            "solver: 500 walls, {} constraints: min {:?}, median {:?}, max {:?}",
-            doc.constraints.len(),
-            times[0],
-            times[times.len() / 2],
-            times[times.len() - 1]
-        );
-        assert!(times[times.len() - 1] < std::time::Duration::from_millis(50));
-        Ok(())
-    }
 
     /// T-105: one fixed command applied to one fixed document, as canonical JSON.
     fn determinism_result() -> Result<String, String> {
