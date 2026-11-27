@@ -445,3 +445,51 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   (b) the same but every optional value required (no catalog defaults); (c) one generic CreateEntity {collection, entity} instead of the added commands.
 - Recommendation: (a). It follows CreateOpening's existing pattern, keeps 7.4's provisional model working, and named commands get exact schemas that the agent (Phase 4) can be checked against.
 - Answer: (a) (owner, 2026-11-26).
+
+## Q-67: Slab extent in the 3D model (found at G-4 preparation, status: answered)
+- Context: every slab in both fixtures uses `Boundary::FromSpace`, which is the Space outline (the walls' inner faces, T-109). Walls stand on z = 0 and the slab runs from z = 0 down by its thickness, so under every door void, the wall thickness has no floor and the outside shows. Measured in target/slice: shop slabs stop at x = 4 and 212 and y = 4 and 428, inside the 0 to 216 by 0 to 432 shell; the L-room slab spans 3 to 237 inside walls whose faces are at -3 and 243. 6.1 gives the slab boundary as "explicit or from Space" only.
+- Options:
+  - (a) Add a boundary `FromSpaces { spaces }`: the union of the listed Spaces and the walls that bound them, out to the bounding walls' far faces. It is derived from the solved walls, so it follows them when they move (P2). Each fixture gets one slab per contiguous floor: the shop gets one slab over its four rooms and the extension (out to x = 280), and the L-room one over its room. Ceilings keep `FromSpace`. The DXF SLABS layer then shows the outer outline. This needs a DEC, since 6.1 lists only explicit or from-Space boundaries.
+  - (b) Keep FromSpace and also add a thin slab piece under each door and opening void in the glTF only. Then the 3D model and the document disagree on where the floor is.
+  - (c) Explicit slab outlines at the exterior faces, written into the fixture scripts. This needs no code, but the slabs would not follow the walls if the walls move.
+- Recommendation: (a).
+- Answer: (a) (owner, 2026-11-27). Recorded as DEC-5.
+
+## Q-68: Shed roof placement (status: answered)
+- Context: two separate defects.
+  - The overhang (catalog 12 in, Proposed) is applied to all four edges, including the ledger edge. The shop roof therefore starts at x = 204, 12 in west of the east wall's exterior face (216), passing through the 4 in wall and 8 in into the shop.
+  - Heights are the roof's top surface at the bearing lines (Q-44, Q-55), and the 8 in thickness hangs below. At the ledger the top is 108 and the underside 100. At the low side the top is 96, the same as the extension walls' 96 in tops, so those walls pass through the whole roof thickness.
+  - In the L-room fixture (my numbers, T-121), the footprint is the Space (the inner faces, 3 in inside the walls), and the high edge of 132 in with 2:12 over 174 in brings the low side down to 103 in. That is 17 in below the 120 in wall tops and below the 108 in ceiling.
+- Options:
+  - (a) Change the roof's own rules:
+    - a ledger edge takes no overhang (6.5 says eave overhang, and a ledger edge is not an eave);
+    - the stated heights are the roof's underside (the bearing surface) at the bearing lines, with the thickness above it;
+    - a footprint should be the bearing walls' exterior outline, so the L-room roof uses the Q-67 (a) outline and the extension keeps its outline at the extension walls' exterior faces;
+    - the L-room roof is re-dimensioned to bear on its walls: low edge 120 in at its low side, high edge from the 2:12 pitch, and its walls follow the roof (Q-69).
+    This changes the answers of Q-44 (the surface measured) and Q-55 (where the thickness goes).
+  - (b) Only make the ledger edge's overhang zero, and keep heights on the top surface. Then for G-2's 108 and 96 to hold as stated, the walls would need tops at 100 and 88.
+- Recommendation: (a). A builder states where the rafters bear, which is the underside.
+- Answer: (a) (owner, 2026-11-27). This supersedes Q-44 on the surface measured (now the underside) and Q-55 on where the roof thickness goes (now above the underside).
+
+## Q-69: Gaps between flat wall tops and a sloped roof (status: answered)
+- Context: wall tops are flat (WallTop::Storey or Height). Under a sloped roof, walls that run along the slope leave a wedge-shaped gap above them, or pass up through the roof. On the shop extension, the north and south walls (96 in tops) have up to 4 in of gap near the east wall and stick up through the roof further out. D-4 and 6.5 make the roof the one exception to flat tops.
+- Options:
+  - (a) Add `WallTop::Roof { roof }`: the wall's elevation profile (already 2D, T-108) takes the roof underside as its top edge. For a wall along the slope that edge is a sloped line. For a wall across the slope, the top is level at the underside's height on the wall's higher face, so no gap opens (it reaches at most one wall thickness times the pitch into the roof, hidden inside it). Walls stay extruded 2D profiles (D-4), but they are a second non-flat exception to 6.5, so this needs a DEC. The extension walls' Proposed 96 in tops become derived from the roof.
+  - (b) A separate infill element (a triangular prism) between each flat wall top and the roof underside, generated in the exports only.
+  - (c) Leave the gaps for v1.
+- Recommendation: (a). The wall is one element in the model, the DXF and UE, rather than two.
+- Answer: (a), provided it is as predictable as the rest (owner, 2026-11-27). Recorded as DEC-6, which fixes the arithmetic: integer nanometers, heights along the slope rounded half to even (5.1), the same input giving the same profile.
+
+## Q-70: Shared vertices in the GLB (status: answered)
+- Context: each element is one mesh, but every triangle face has its own copies of its corner vertices so that each face carries its own normal (flat shading, Q-55). A box corner is therefore stored three times (24 vertices for 8 corners). Tools that do not merge vertices on import see disconnected faces, not a closed solid.
+- Options:
+  - (a) Shared, indexed vertices with no NORMAL attribute. The glTF 2.0 spec says that when normals are missing, clients must calculate flat normals. Each element becomes one closed, welded solid, and the files shrink by about two thirds. Risk: whether UE 5.8's glTF importer computes flat normals rather than smoothing them is not verified. G-4 would check it, and if it smooths, fall back to (b).
+  - (b) Keep the split vertices (the usual glTF way to carry flat shading) and document that importers should merge vertices.
+  - (c) Both: welded shared vertices with no normals in the Scene Package element GLBs, which UE is the only reader of, and split vertices with normals in the whole-model GLB for other tools.
+- Recommendation: (a), confirmed at G-4. The Scene Package's collision prisms are unaffected either way.
+- Answer: (a), with UE 5.8 import checked at G-4 and (b) as the fallback (owner, 2026-11-27). This supersedes Q-55 on normals.
+
+## Q-71: Where the Q-67 to Q-70 fixes go (status: open)
+- Context: the defects are in T-109 (slabs), T-115 (roof), T-119 (GLB) and the T-121 L-room fixture, not in T-122. CLAUDE.md allows one task per session. G-4 should not run on the current GLBs.
+- Options: (a) add T-122b "Slice geometry fixes" to docs/PLAN.md before G-4, covering the answers to Q-67 to Q-70 and regenerating fixtures and goldens. T-122 stays open until G-4 passes on its output. (b) a separate task per question.
+- Recommendation: (a). The four fixes share the goldens and are checked together at G-4.

@@ -48,3 +48,23 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Evidence: the shop of gate G-2 (fixtures/shop, 15 walls, 9 constraints, 7 openings, 4 spaces and slabs, a ledger shed roof, 12 equipment boxes) was entered through the CLI and solved by `cargo xtask slice` with 0 conflicts, 0 violations and 102 Proposed values listed. The degrees-of-freedom report lists exactly 24 underconstrained classes, the 12 occurrences on X and on Y, each naming its member, because no dimension ties equipment to a wall (crates/cli/tests/fixtures.rs). A contradicting 1 in datum-to-wall distance produces one Conflict naming the new constraint and the existing one, residual exactly -1 in, and the commit is refused as BLOCKED (s1_shop_conflict_names_both_constraints). Entering the walls and constraints reversed, or rotated, gives a byte-identical solution (s1_shop_solution_is_order_independent), adding to T-106's shuffled-order property test.
 - Limits: the shop is axis-aligned with only Distance constraints and shared nodes; Equal, Align and Measured tolerances are covered by T-106 and T-120b tests, not by this plan.
 - Status: draft
+
+## DEC-5: Slab outline from Spaces out to their walls' far faces
+- Date: 2026-11-27
+- Task or spike: found preparing G-4 (Q-67)
+- Spec section: 6 (Slab boundary), 6.1
+- Decision: add a boundary `FromSpaces { spaces }` alongside Explicit and FromSpace. It is the union of the listed Spaces and the walls bounding them, out to each bounding wall's far face, derived from the solved walls at commit like FromSpace. The fixtures use one such slab per contiguous floor. Ceilings keep FromSpace. 7.7's check that a Slab boundary is a simple rectilinear polygon applies to the result.
+- Rationale: a slab outline at the inner faces leaves the floor open under every door void in the 3D model; the derived outline follows the walls (P2), whereas an explicit one would not.
+- Status: approved (owner, Q-67, 2026-11-27)
+
+## DEC-6: Wall tops that follow a roof's underside
+- Date: 2026-11-27
+- Task or spike: found preparing G-4 (Q-69)
+- Spec section: D-4, 6.5
+- Decision: add `WallTop::Roof { roof }`. The wall's elevation profile (a 2D polygon, as for opening voids) takes the roof's underside as its top edge. The arithmetic follows the rest of core: integer nanometers only. The underside height at a point s along the slope axis is high - (s - high_edge) x rise / run, computed in i128 and rounded half to even to the nanometer (5.1), the same rule that derives a low edge from a pitch. Profile vertices are taken only at the wall's ends, at its faces and at opening void edges, so the same document gives the same profile byte for byte, whatever order the walls were created in.
+  - A wall along the slope gets a sloped top edge.
+  - A wall across the slope is level at the underside height on its higher face, so it closes against the roof, reaching at most its thickness x rise / run into the roof's thickness.
+  - A wall whose top would be at or below an opening head, or that lies outside the roof's footprint plus overhangs, is a violation (7.7). It is not clipped silently.
+  - Such a wall's height becomes Derived, not Proposed.
+- Rationale: walls stay extruded 2D profiles (D-4), but this is a second non-flat exception next to the roof in 6.5. It closes the gaps between flat wall tops and a sloped roof, with one element per wall in the model, the DXF and UE.
+- Status: approved (owner, Q-69, 2026-11-27)
