@@ -27,7 +27,7 @@ use crate::identity::Uuid;
 use crate::proposal::{DeriveError, derive};
 
 /// What happened.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
     /// Commands applied atomically, in order (8.4).
@@ -39,7 +39,7 @@ pub enum Event {
 }
 
 /// One log line: the event and its session metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogEntry {
     /// 1 for the first event, then consecutive.

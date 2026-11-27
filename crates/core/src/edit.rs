@@ -48,7 +48,7 @@ pub enum Case {
 }
 
 /// One way to resolve a move, with its resulting dimensions.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Candidate {
     /// The dimension this option is about (a constraint, opening or occurrence id).
     pub choice: Uuid,

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`undo`: commits an Undo.",
+  "properties": {
+    "actor": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp_ms": {
+      "default": null,
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "UndoRequest",
+  "type": "object"
+}

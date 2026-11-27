@@ -1,0 +1,360 @@
+{
+  "$defs": {
+    "Axis": {
+      "description": "A plan axis.",
+      "enum": [
+        "x",
+        "y"
+      ],
+      "type": "string"
+    },
+    "CliError": {
+      "description": "A failed request.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Conflict": {
+      "description": "A redundant constraint that disagrees (7.5).",
+      "properties": {
+        "constraint": {
+          "$ref": "#/$defs/Uuid",
+          "description": "The constraint later in processing order."
+        },
+        "residual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How far it is from agreeing, when it has a value."
+        },
+        "with": {
+          "description": "The constraints it disagrees with: every one on the path it closes, sorted.",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "constraint",
+        "with"
+      ],
+      "type": "object"
+    },
+    "ConstraintReport": {
+      "description": "The solver's report for one constraint.",
+      "properties": {
+        "computed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The value the solved geometry gives, when both references are related."
+        },
+        "copied_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Distance whose value this one takes through an Equal (Q-14)."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "residual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`computed - value`, when both are known."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The value in force: the stored value, or the value copied by Equal."
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Stable error codes (Q-50). Never change a code's meaning once released.",
+      "enum": [
+        "BAD_REQUEST",
+        "NOT_A_PROJECT",
+        "PROJECT_EXISTS",
+        "LOCKED",
+        "CORRUPT_PROJECT",
+        "COMMAND_FAILED",
+        "STALE",
+        "ALTERED",
+        "BLOCKED",
+        "NOTHING_TO_UNDO",
+        "NOT_FOUND",
+        "IO"
+      ],
+      "type": "string"
+    },
+    "FreeClass": {
+      "description": "One underconstrained class: its members move together by one translation.",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/Axis"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/Member"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "axis",
+        "members"
+      ],
+      "type": "object"
+    },
+    "Length": {
+      "description": "A length in nanometers.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "Member": {
+      "description": "Something whose coordinate lies in an underconstrained class.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A node's coordinate on the class's axis.",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A wall's reference line (walls perpendicular to the class's axis).",
+          "properties": {
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An opening's position along its host (Q-20).",
+          "properties": {
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "opening"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An occurrence's center on the class's axis (Q-31).",
+          "properties": {
+            "occurrence": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "occurrence"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Outcome": {
+      "description": "What the solver made of one constraint.",
+      "oneOf": [
+        {
+          "const": "driving",
+          "description": "Merged two classes: it determines something.",
+          "type": "string"
+        },
+        {
+          "const": "redundant",
+          "description": "Driving, but its references were already related and it agrees.",
+          "type": "string"
+        },
+        {
+          "const": "demoted",
+          "description": "A redundant Measured constraint within tolerance: now Reference (7.5).",
+          "type": "string"
+        },
+        {
+          "const": "conflict",
+          "description": "Redundant and disagreeing beyond tolerance; see [`Solution::conflicts`].",
+          "type": "string"
+        },
+        {
+          "const": "reference",
+          "description": "A Reference-status constraint: reported, constrains nothing (7.2).",
+          "type": "string"
+        },
+        {
+          "const": "not_solved",
+          "description": "Not solved by Layer A (MinClearance is checked after solving, 7.1).",
+          "type": "string"
+        }
+      ]
+    },
+    "Point": {
+      "additionalProperties": false,
+      "description": "A point in plan.",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "Solution": {
+      "description": "The result of a solve.",
+      "properties": {
+        "conflicts": {
+          "description": "Sorted by constraint id.",
+          "items": {
+            "$ref": "#/$defs/Conflict"
+          },
+          "type": "array"
+        },
+        "constraints": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ConstraintReport"
+          },
+          "type": "object"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Point"
+          },
+          "description": "Every node's position: exact where determined, provisional otherwise.",
+          "type": "object"
+        },
+        "occurrences": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Point"
+          },
+          "description": "Every occurrence's footprint center (Q-31).",
+          "type": "object"
+        },
+        "openings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Length"
+          },
+          "description": "Every opening's start-edge coordinate on its host's along axis (Q-20).",
+          "type": "object"
+        },
+        "underconstrained": {
+          "description": "The degrees-of-freedom report, sorted by axis (X first) then members.",
+          "items": {
+            "$ref": "#/$defs/FreeClass"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes",
+        "openings",
+        "occurrences",
+        "constraints",
+        "conflicts",
+        "underconstrained"
+      ],
+      "type": "object"
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The response every subcommand writes.",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CliError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Solution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "Response",
+  "type": "object"
+}

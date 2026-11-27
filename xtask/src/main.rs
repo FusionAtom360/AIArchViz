@@ -7,7 +7,7 @@ use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: cargo xtask <check | golden>
   check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
-  golden  regenerate schemas/document.schema.json and the insta snapshots";
+  golden  regenerate schemas/ (document and cli) and the insta snapshots";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -76,10 +76,26 @@ fn golden() -> Result<(), String> {
         let path = root.join("schemas").join("document.schema.json");
         std::fs::write(&path, schema).map_err(|e| format!("{}: {e}", path.display()))
     })?;
-    step("insta snapshots (archviz-core)", || {
+    step("schemas/cli/*.schema.json", || {
+        let dir = root.join("schemas").join("cli");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for (name, text) in archviz_cli::schemas()? {
+            let path = dir.join(name);
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    })?;
+    step("insta snapshots (archviz-core, archviz-cli)", || {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let status = Command::new(cargo)
-            .args(["test", "-p", "archviz-core", "--locked"])
+            .args([
+                "test",
+                "-p",
+                "archviz-core",
+                "-p",
+                "archviz-cli",
+                "--locked",
+            ])
             .env("INSTA_UPDATE", "always")
             .current_dir(&root)
             .status()

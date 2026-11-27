@@ -12,3 +12,6 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | schemars (+ schemars_derive) | 1.2.3 (`std`, `derive`, `uuid1`) | MIT | archviz-core | Generates schemas/document.schema.json from the model types. |
 | insta | 1.49.0 | Apache-2.0 | archviz-core (dev) | Golden-file snapshots (CLAUDE.md). Test-only. |
 | jsonschema | 0.63.2 (default-features off) | MIT | archviz-core (dev) | Validates the golden document against the generated schema. Test-only; its transitive crates are MIT, Apache-2.0, BSD, Zlib or Unlicense-or-MIT, checked by cargo deny. |
+| uuid (`v4`) | 1.29.3 | Apache-2.0 OR MIT | archviz-cli | Random ids for `new` when the request gives none (Q-49); pulls getrandom 0.4.3 (MIT OR Apache-2.0). Only the CLI enables v4; core never generates random ids. |
+| serde, serde_json, schemars | as above | as above | archviz-cli | Request and response types and their schemas in schemas/cli/. |
+| insta | 1.49.0 | Apache-2.0 | archviz-cli (dev) | Golden CLI transcripts. |

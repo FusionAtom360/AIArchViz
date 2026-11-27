@@ -19,7 +19,9 @@ mod space;
 mod units;
 mod validity;
 
-pub use canonical::{CanonicalError, document_schema_json, from_canonical_json, to_canonical_json};
+pub use canonical::{
+    CanonicalError, document_schema_json, from_canonical_json, to_canonical_json, to_pretty_json,
+};
 pub use clearance::{ClearanceError, ClearanceRequest, clearance_resolve, wall_normal_axis};
 pub use command::{
     Action, Command, CommandError, CreateNode, CreateOpening, DimensionTarget, Motion,

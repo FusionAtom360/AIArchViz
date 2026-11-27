@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`new`: creates a project folder.",
+  "properties": {
+    "building": {
+      "type": "string"
+    },
+    "building_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Uuid"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "name": {
+      "type": "string"
+    },
+    "project_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Uuid"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "name",
+    "building"
+  ],
+  "title": "NewRequest",
+  "type": "object"
+}

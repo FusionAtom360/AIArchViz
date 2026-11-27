@@ -1,0 +1,34 @@
+{
+  "$defs": {
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`query`: the document, one collection, or one entity.",
+  "properties": {
+    "collection": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Uuid"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "QueryRequest",
+  "type": "object"
+}

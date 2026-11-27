@@ -15,3 +15,4 @@ workspace = true
 
 [dependencies]
 archviz-core = { path = "../crates/core" }
+archviz-cli = { path = "../crates/cli" }

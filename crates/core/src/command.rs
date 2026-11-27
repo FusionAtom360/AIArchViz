@@ -34,12 +34,12 @@ pub struct Command {
 }
 
 /// Arguments of a command whose arguments are not defined yet.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NoArgs {}
 
 /// Creates an isolated node. Its position is provisional until solved.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateNode {
     pub x: Length,
@@ -47,7 +47,7 @@ pub struct CreateNode {
 }
 
 /// Creates a storey (`storey` is null) or replaces an existing one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetStorey {
     pub storey: Option<Uuid>,
@@ -58,7 +58,7 @@ pub struct SetStorey {
 }
 
 /// Selects one of a variant slot's options.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetVariantSelection {
     pub slot: Uuid,
@@ -67,7 +67,7 @@ pub struct SetVariantSelection {
 
 /// Creates an opening, door or window in a host wall (Q-23). Null sizes take
 /// the defaults catalog value with source Proposed (6.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateOpening {
     pub kind: OpeningKind,
@@ -82,7 +82,7 @@ pub struct CreateOpening {
 
 /// How far a move goes: a signed delta along the axis, or the target
 /// coordinate of the moved reference (Q-39).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Motion {
     Delta { delta: Length },
@@ -90,7 +90,7 @@ pub enum Motion {
 }
 
 /// Moves a wall across its axis by editing the dimensions that fix it (8.7).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MoveWall {
     pub wall: Uuid,
@@ -104,7 +104,7 @@ pub struct MoveWall {
 }
 
 /// Moves an opening along its host; `motion` names its start edge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MoveOpening {
     pub opening: Uuid,
@@ -115,7 +115,7 @@ pub struct MoveOpening {
 
 /// Moves an occurrence's center along one axis (a wall-mounted item only
 /// along its host).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MoveOccurrence {
     pub occurrence: Uuid,
@@ -126,7 +126,9 @@ pub struct MoveOccurrence {
 }
 
 /// A dimension a move can change (Q-39).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DimensionTarget {
     /// The value of a Distance or Fixed constraint.
@@ -156,7 +158,9 @@ impl DimensionTarget {
 }
 
 /// Sets one dimension (8.2). Moves resolve to these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct SetConstraintValue {
     pub target: DimensionTarget,
@@ -165,7 +169,7 @@ pub struct SetConstraintValue {
 
 /// Gives a wall exactly these layers and left extent (Q-43). A layer set
 /// shared with other walls is copied, so they are untouched.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetWallLayers {
     pub wall: Uuid,
@@ -174,14 +178,14 @@ pub struct SetWallLayers {
 }
 
 /// Sets the unit of bare numbers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetProjectUnits {
     pub default_unit: ProjectUnit,
 }
 
 /// The v1 command set (8.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(
     tag = "kind",
     content = "args",
@@ -247,6 +251,40 @@ struct Wire {
     idempotency_key: Uuid,
     kind: String,
     args: Value,
+}
+
+impl schemars::JsonSchema for Command {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Command".into()
+    }
+
+    /// Action's schema with `id` and `idempotency_key` added to every
+    /// variant: the flat wire form of 8.1.
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = <Action as schemars::JsonSchema>::json_schema(generator);
+        let uuid = serde_json::to_value(generator.subschema_for::<Uuid>()).unwrap_or(Value::Null);
+        if let Some(object) = schema.as_object_mut() {
+            if let Some(branches) = object.get_mut("oneOf").and_then(Value::as_array_mut) {
+                for branch in branches.iter_mut().filter_map(Value::as_object_mut) {
+                    if let Some(props) = branch.get_mut("properties").and_then(Value::as_object_mut)
+                    {
+                        props.insert("id".into(), uuid.clone());
+                        props.insert("idempotency_key".into(), uuid.clone());
+                    }
+                    if let Some(required) = branch.get_mut("required").and_then(Value::as_array_mut)
+                    {
+                        required.push("id".into());
+                        required.push("idempotency_key".into());
+                    }
+                }
+            }
+            object.insert(
+                "description".into(),
+                "One command (8.1): {id, kind, args, idempotency_key}.".into(),
+            );
+        }
+        schema
+    }
 }
 
 impl Serialize for Command {

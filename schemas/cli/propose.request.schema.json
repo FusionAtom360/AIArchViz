@@ -1,0 +1,1269 @@
+{
+  "$defs": {
+    "Axis": {
+      "description": "A plan axis.",
+      "enum": [
+        "x",
+        "y"
+      ],
+      "type": "string"
+    },
+    "Command": {
+      "description": "One command (8.1): {id, kind, args, idempotency_key}.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateNode"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_node",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "split_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "merge_walls",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetWallLayers"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_wall_layers",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveWall"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateOpening"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_opening",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveOpening"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_opening",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "place_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveOccurrence"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "rotate_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "delete_entity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "add_constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "remove_constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetConstraintValue"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_constraint_value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetStorey"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_storey",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "apply_operator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "remove_operator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetVariantSelection"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_variant_selection",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetProjectUnits"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_project_units",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CreateNode": {
+      "additionalProperties": false,
+      "description": "Creates an isolated node. Its position is provisional until solved.",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "CreateOpening": {
+      "additionalProperties": false,
+      "description": "Creates an opening, door or window in a host wall (Q-23). Null sizes take\nthe defaults catalog value with source Proposed (6.4).",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/OpeningEdge"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OpeningKind"
+        },
+        "offset": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "sill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "host",
+        "reference",
+        "anchor",
+        "offset"
+      ],
+      "type": "object"
+    },
+    "DimensionTarget": {
+      "description": "A dimension a move can change (Q-39).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The value of a Distance or Fixed constraint.",
+          "properties": {
+            "constraint": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "constraint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An opening's offset from its reference.",
+          "properties": {
+            "kind": {
+              "const": "opening_offset",
+              "type": "string"
+            },
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "opening"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A wall-mounted occurrence's offset from its reference.",
+          "properties": {
+            "kind": {
+              "const": "occurrence_offset",
+              "type": "string"
+            },
+            "occurrence": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "occurrence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A node's stored coordinate (free classes, Q-38).",
+          "properties": {
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "kind": {
+              "const": "node_coordinate",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "node",
+            "axis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A floor or ceiling occurrence's stored center coordinate (Q-38).",
+          "properties": {
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "kind": {
+              "const": "occurrence_coordinate",
+              "type": "string"
+            },
+            "occurrence": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "occurrence",
+            "axis"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemSide": {
+      "description": "A side of an occurrence footprint, in the occurrence's own frame.",
+      "enum": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "Layer": {
+      "additionalProperties": false,
+      "description": "One material layer.",
+      "properties": {
+        "core": {
+          "type": "boolean"
+        },
+        "material": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "material",
+        "thickness",
+        "core"
+      ],
+      "type": "object"
+    },
+    "Length": {
+      "description": "A length in nanometers.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "Motion": {
+      "description": "How far a move goes: a signed delta along the axis, or the target\ncoordinate of the moved reference (Q-39).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/Length"
+            },
+            "kind": {
+              "const": "delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "target",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MoveOccurrence": {
+      "additionalProperties": false,
+      "description": "Moves an occurrence's center along one axis (a wall-mounted item only\nalong its host).",
+      "properties": {
+        "absorb": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "axis": {
+          "$ref": "#/$defs/Axis"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "occurrence": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "occurrence",
+        "axis",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "MoveOpening": {
+      "additionalProperties": false,
+      "description": "Moves an opening along its host; `motion` names its start edge.",
+      "properties": {
+        "absorb": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "opening": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "opening",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "MoveWall": {
+      "additionalProperties": false,
+      "description": "Moves a wall across its axis by editing the dimensions that fix it (8.7).",
+      "properties": {
+        "absorb": {
+          "description": "PolicyChoices taken: dimensions that absorb the move (8.7 (b)).",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The constraint the user picked for a ReferenceSemantics ambiguity."
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference",
+          "description": "The wall's own face or center whose coordinate `motion` names."
+        },
+        "wall": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "wall",
+        "reference",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "NoArgs": {
+      "additionalProperties": false,
+      "description": "Arguments of a command whose arguments are not defined yet.",
+      "type": "object"
+    },
+    "OpeningEdge": {
+      "description": "An edge or the center of an opening along its host wall.",
+      "enum": [
+        "start",
+        "end",
+        "center"
+      ],
+      "type": "string"
+    },
+    "OpeningKind": {
+      "description": "What fills an opening.",
+      "enum": [
+        "opening",
+        "door",
+        "window"
+      ],
+      "type": "string"
+    },
+    "ProjectUnit": {
+      "description": "The unit of a bare number. Stored on the project (Q-9).",
+      "enum": [
+        "inches",
+        "feet"
+      ],
+      "type": "string"
+    },
+    "ProposedAction": {
+      "description": "What a proposal would do.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commands": {
+              "items": {
+                "$ref": "#/$defs/Command"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "commands",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "commands"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "undo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "redo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Reference": {
+      "description": "A geometric reference that dimensions and constraints name (6.2).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "node",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`boundary` counts layer boundaries from the `side` finish face\ninward: 0 is that face, the number of layers is the opposite face (Q-16).",
+          "properties": {
+            "boundary": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "wall_face",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/WallSide"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall",
+            "side",
+            "boundary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wall_center",
+              "type": "string"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "$ref": "#/$defs/OpeningEdge"
+            },
+            "kind": {
+              "const": "opening_edge",
+              "type": "string"
+            },
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "opening",
+            "edge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_edge",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/ItemSide"
+            }
+          },
+          "required": [
+            "kind",
+            "item",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_center",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "item"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "datum": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "datum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "datum"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SetConstraintValue": {
+      "additionalProperties": false,
+      "description": "Sets one dimension (8.2). Moves resolve to these.",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/DimensionTarget"
+        },
+        "value": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "target",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SetProjectUnits": {
+      "additionalProperties": false,
+      "description": "Sets the unit of bare numbers.",
+      "properties": {
+        "default_unit": {
+          "$ref": "#/$defs/ProjectUnit"
+        }
+      },
+      "required": [
+        "default_unit"
+      ],
+      "type": "object"
+    },
+    "SetStorey": {
+      "additionalProperties": false,
+      "description": "Creates a storey (`storey` is null) or replaces an existing one.",
+      "properties": {
+        "default_ceiling_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "floor_to_floor": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "name": {
+          "type": "string"
+        },
+        "storey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "elevation",
+        "floor_to_floor",
+        "default_ceiling_height"
+      ],
+      "type": "object"
+    },
+    "SetVariantSelection": {
+      "additionalProperties": false,
+      "description": "Selects one of a variant slot's options.",
+      "properties": {
+        "selected": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "slot": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "slot",
+        "selected"
+      ],
+      "type": "object"
+    },
+    "SetWallLayers": {
+      "additionalProperties": false,
+      "description": "Gives a wall exactly these layers and left extent (Q-43). A layer set\nshared with other walls is copied, so they are untouched.",
+      "properties": {
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/Layer"
+          },
+          "type": "array"
+        },
+        "left_extent": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "wall": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "wall",
+        "layers",
+        "left_extent"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "Where a value came from (spec 7.2).",
+      "enum": [
+        "user_stated",
+        "measured",
+        "derived",
+        "proposed",
+        "imported"
+      ],
+      "type": "string"
+    },
+    "Sourced": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "WallSide": {
+      "description": "A side of a wall, looking from node_a to node_b (6.1).",
+      "enum": [
+        "left",
+        "right"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "`propose`: returns the proposal; stores nothing.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ProposedAction"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "ProposeRequest",
+  "type": "object"
+}

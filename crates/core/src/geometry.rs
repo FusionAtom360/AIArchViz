@@ -42,7 +42,8 @@ pub struct WallGeometry {
 }
 
 /// Why wall geometry cannot be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum GeometryError {
     UnknownEntity {
         id: Uuid,
@@ -443,7 +444,8 @@ pub struct WallProfile {
 }
 
 /// What is wrong with an opening's fit in its host (7.7, Q-22).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum OpeningProblem {
     /// Width or height is zero or negative.
     NonPositiveSize,

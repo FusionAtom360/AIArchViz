@@ -86,7 +86,7 @@ pub fn derive(document: Document) -> Result<Derived, DeriveError> {
 }
 
 /// What a proposal would do.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProposedAction {
     Commands { commands: Vec<Command> },
@@ -95,7 +95,7 @@ pub enum ProposedAction {
 }
 
 /// Ambiguity kinds (9.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AmbiguityKind {
     Referent,
@@ -118,7 +118,7 @@ impl AmbiguityKind {
 /// An unresolved choice (9.2): {kind, candidates, default if any}. Each
 /// candidate names the dimension it is about, with its resulting edits and
 /// what moves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Ambiguity {
     pub kind: AmbiguityKind,
     pub candidates: Vec<Candidate>,
@@ -126,7 +126,8 @@ pub struct Ambiguity {
 }
 
 /// Something the user should notice before confirming (Q-36).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Flag {
     /// An added or changed value with source Proposed (6.4, 7.4).
     ProposedValue {
@@ -139,7 +140,8 @@ pub enum Flag {
 }
 
 /// How an entity changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Change {
     Added,
     Removed,
@@ -147,7 +149,7 @@ pub enum Change {
 }
 
 /// One changed entity, before and after, in nanometers and display units.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct DiffEntry {
     /// The document field, e.g. "walls"; singletons such as "project" have no id.
     pub collection: String,
@@ -163,7 +165,7 @@ pub struct DiffEntry {
 }
 
 /// The result of `propose` (8.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Proposal {
     pub proposal_id: Uuid,
     pub base_version: u64,

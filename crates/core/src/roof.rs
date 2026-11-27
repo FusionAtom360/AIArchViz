@@ -35,7 +35,8 @@ pub struct RoofGeometry {
 }
 
 /// Why a roof is not well defined.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum RoofProblem {
     /// The ledger is not a face of an existing wall (Q-45).
     LedgerNotExistingWallFace,

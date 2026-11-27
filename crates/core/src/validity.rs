@@ -37,7 +37,8 @@ use crate::space::SpaceError;
 use crate::space::{boundary_outline, space_boundary};
 
 /// What exactly is wrong.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Detail {
     /// node_b is `length` from node_a along the wall's direction (zero or less).
     NonPositiveLength { length: Length },
@@ -62,7 +63,7 @@ pub enum Detail {
 }
 
 /// One failed invariant.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Violation {
     pub key: ViolationKey,
     pub detail: Detail,

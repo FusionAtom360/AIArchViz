@@ -17,7 +17,10 @@ use crate::length::Length;
 use crate::units::format_length;
 
 /// Why a parameter is listed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Reason {
     /// It holds a catalog default with source Proposed.
     ProposedDefault,
@@ -26,7 +29,10 @@ pub enum Reason {
 }
 
 /// The unit a parameter is given in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Unit {
     Length,
     Lumens,
@@ -37,7 +43,7 @@ pub enum Unit {
 }
 
 /// One parameter the user should supply or confirm (7.4).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct RequiredParameter {
     /// The document field holding the entity, e.g. "walls".
     pub collection: String,

@@ -21,7 +21,8 @@ use crate::identity::Uuid;
 use crate::length::Length;
 
 /// Why a polygon is not a simple rectilinear polygon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum PolygonError {
     TooFewVertices,
     /// Edge `edge` (from vertex `edge` to the next) is diagonal or has no length.
@@ -54,7 +55,8 @@ impl fmt::Display for PolygonError {
 impl std::error::Error for PolygonError {}
 
 /// Why a space, slab or ceiling outline cannot be found.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum SpaceError {
     Geometry(GeometryError),
     Polygon(PolygonError),

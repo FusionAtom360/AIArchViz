@@ -1,0 +1,183 @@
+{
+  "$defs": {
+    "CliError": {
+      "description": "A failed request.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Stable error codes (Q-50). Never change a code's meaning once released.",
+      "enum": [
+        "BAD_REQUEST",
+        "NOT_A_PROJECT",
+        "PROJECT_EXISTS",
+        "LOCKED",
+        "CORRUPT_PROJECT",
+        "COMMAND_FAILED",
+        "STALE",
+        "ALTERED",
+        "BLOCKED",
+        "NOTHING_TO_UNDO",
+        "NOT_FOUND",
+        "IO"
+      ],
+      "type": "string"
+    },
+    "Reason": {
+      "description": "Why a parameter is listed.",
+      "oneOf": [
+        {
+          "const": "proposed_default",
+          "description": "It holds a catalog default with source Proposed.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "It has no value and no default (a roof's pitch or low edge, T-115).",
+          "type": "string"
+        }
+      ]
+    },
+    "RequiredParameter": {
+      "description": "One parameter the user should supply or confirm (7.4).",
+      "properties": {
+        "alternatives": {
+          "description": "Other fields that satisfy this one when given instead (e.g. a roof's\nlow edge instead of its pitch).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "collection": {
+          "description": "The document field holding the entity, e.g. \"walls\".",
+          "type": "string"
+        },
+        "entity": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "field": {
+          "description": "JSON pointer to the value within the entity, e.g. \"/layers/0/thickness\".",
+          "type": "string"
+        },
+        "label": {
+          "description": "The entity's label, when it has one (W-007).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proposed": {
+          "description": "The proposed default, as stored (a length in nanometers)."
+        },
+        "proposed_display": {
+          "description": "The proposed default as shown to the user (feet-inches for lengths).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/Reason"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        }
+      },
+      "required": [
+        "collection",
+        "entity",
+        "field",
+        "reason",
+        "unit",
+        "alternatives"
+      ],
+      "type": "object"
+    },
+    "RequiredParametersResult": {
+      "properties": {
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/RequiredParameter"
+          },
+          "type": "array"
+        },
+        "provisional": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "parameters",
+        "provisional"
+      ],
+      "type": "object"
+    },
+    "Unit": {
+      "description": "The unit a parameter is given in.",
+      "oneOf": [
+        {
+          "enum": [
+            "length",
+            "lumens",
+            "kelvin",
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pitch",
+          "description": "Rise over run.",
+          "type": "string"
+        }
+      ]
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The response every subcommand writes.",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CliError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RequiredParametersResult"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "Response",
+  "type": "object"
+}

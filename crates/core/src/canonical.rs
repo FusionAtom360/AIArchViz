@@ -63,6 +63,16 @@ pub fn from_canonical_json(text: &str) -> Result<Document, CanonicalError> {
     serde_json::from_str(text).map_err(|e| CanonicalError::Json(e.to_string()))
 }
 
+/// `value` pretty-printed with sorted keys, two-space indents and a
+/// trailing newline: for files people read, such as schemas.
+pub fn to_pretty_json<T: Serialize>(value: &T) -> Result<String, CanonicalError> {
+    let value = serde_json::to_value(value).map_err(|e| CanonicalError::Json(e.to_string()))?;
+    let mut out = String::new();
+    write_value(&value, Some(2), 0, &mut out)?;
+    out.push('\n');
+    Ok(out)
+}
+
 /// The JSON Schema of the document, pretty-printed with sorted keys and a
 /// trailing newline: the content of schemas/document.schema.json.
 pub fn document_schema_json() -> Result<String, CanonicalError> {

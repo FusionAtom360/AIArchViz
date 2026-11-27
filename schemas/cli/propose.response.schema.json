@@ -1,0 +1,2476 @@
+{
+  "$defs": {
+    "Ambiguity": {
+      "description": "An unresolved choice (9.2): {kind, candidates, default if any}. Each\ncandidate names the dimension it is about, with its resulting edits and\nwhat moves.",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          },
+          "type": "array"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/AmbiguityKind"
+        }
+      },
+      "required": [
+        "kind",
+        "candidates"
+      ],
+      "type": "object"
+    },
+    "AmbiguityKind": {
+      "description": "Ambiguity kinds (9.2).",
+      "enum": [
+        "referent",
+        "direction",
+        "magnitude",
+        "reference_semantics",
+        "policy_choice"
+      ],
+      "type": "string"
+    },
+    "Axis": {
+      "description": "A plan axis.",
+      "enum": [
+        "x",
+        "y"
+      ],
+      "type": "string"
+    },
+    "Candidate": {
+      "description": "One way to resolve a move, with its resulting dimensions.",
+      "properties": {
+        "choice": {
+          "$ref": "#/$defs/Uuid",
+          "description": "The dimension this option is about (a constraint, opening or occurrence id)."
+        },
+        "edits": {
+          "items": {
+            "$ref": "#/$defs/SetConstraintValue"
+          },
+          "type": "array"
+        },
+        "moved": {
+          "description": "Entities other than the moved one that move under this option.",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "choice",
+        "edits",
+        "moved"
+      ],
+      "type": "object"
+    },
+    "Change": {
+      "description": "How an entity changes.",
+      "enum": [
+        "added",
+        "removed",
+        "changed"
+      ],
+      "type": "string"
+    },
+    "CliError": {
+      "description": "A failed request.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Command": {
+      "description": "One command (8.1): {id, kind, args, idempotency_key}.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateNode"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_node",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "split_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "merge_walls",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetWallLayers"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_wall_layers",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveWall"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_wall",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateOpening"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_opening",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveOpening"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_opening",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "place_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/MoveOccurrence"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "move_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "rotate_occurrence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "delete_entity",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "add_constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "remove_constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetConstraintValue"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_constraint_value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetStorey"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_storey",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "apply_operator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "remove_operator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetVariantSelection"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_variant_selection",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetProjectUnits"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_project_units",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Conflict": {
+      "description": "A redundant constraint that disagrees (7.5).",
+      "properties": {
+        "constraint": {
+          "$ref": "#/$defs/Uuid",
+          "description": "The constraint later in processing order."
+        },
+        "residual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How far it is from agreeing, when it has a value."
+        },
+        "with": {
+          "description": "The constraints it disagrees with: every one on the path it closes, sorted.",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "constraint",
+        "with"
+      ],
+      "type": "object"
+    },
+    "ConstraintReport": {
+      "description": "The solver's report for one constraint.",
+      "properties": {
+        "computed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The value the solved geometry gives, when both references are related."
+        },
+        "copied_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The Distance whose value this one takes through an Equal (Q-14)."
+        },
+        "outcome": {
+          "$ref": "#/$defs/Outcome"
+        },
+        "residual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`computed - value`, when both are known."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Length"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The value in force: the stored value, or the value copied by Equal."
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "CreateNode": {
+      "additionalProperties": false,
+      "description": "Creates an isolated node. Its position is provisional until solved.",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "CreateOpening": {
+      "additionalProperties": false,
+      "description": "Creates an opening, door or window in a host wall (Q-23). Null sizes take\nthe defaults catalog value with source Proposed (6.4).",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/OpeningEdge"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/OpeningKind"
+        },
+        "offset": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "sill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sourced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "host",
+        "reference",
+        "anchor",
+        "offset"
+      ],
+      "type": "object"
+    },
+    "Detail": {
+      "description": "What exactly is wrong.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "node_b is `length` from node_a along the wall's direction (zero or less).",
+          "properties": {
+            "non_positive_length": {
+              "properties": {
+                "length": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "length"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "non_positive_length"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The nodes are `offset` apart across the wall's direction.",
+          "properties": {
+            "not_on_one_line": {
+              "properties": {
+                "offset": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "offset"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "not_on_one_line"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "overlap",
+          "description": "The two walls' footprints share area.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Every problem with one opening.",
+          "properties": {
+            "opening": {
+              "items": {
+                "$ref": "#/$defs/OpeningProblem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "opening"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why the outline is not a simple rectilinear polygon.",
+          "properties": {
+            "outline": {
+              "$ref": "#/$defs/SpaceError"
+            }
+          },
+          "required": [
+            "outline"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "blocked",
+          "description": "A clearance zone is entered by a wall or another occurrence.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Why a roof is not well defined.",
+          "properties": {
+            "roof": {
+              "$ref": "#/$defs/RoofProblem"
+            }
+          },
+          "required": [
+            "roof"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The footprints are `dx` and `dy` apart, closer than `required` (Q-32).",
+          "properties": {
+            "too_close": {
+              "properties": {
+                "dx": {
+                  "$ref": "#/$defs/Length"
+                },
+                "dy": {
+                  "$ref": "#/$defs/Length"
+                },
+                "required": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "dx",
+                "dy",
+                "required"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "too_close"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DiffEntry": {
+      "description": "One changed entity, before and after, in nanometers and display units.",
+      "properties": {
+        "after": true,
+        "after_display": true,
+        "before": true,
+        "before_display": {
+          "description": "The same values with every Length shown in feet-inches-fractions."
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "changed_paths": {
+          "description": "JSON pointers, within the entity, of every value that differs.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "collection": {
+          "description": "The document field, e.g. \"walls\"; singletons such as \"project\" have no id.",
+          "type": "string"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "collection",
+        "change",
+        "changed_paths"
+      ],
+      "type": "object"
+    },
+    "DimensionTarget": {
+      "description": "A dimension a move can change (Q-39).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The value of a Distance or Fixed constraint.",
+          "properties": {
+            "constraint": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "constraint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "constraint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An opening's offset from its reference.",
+          "properties": {
+            "kind": {
+              "const": "opening_offset",
+              "type": "string"
+            },
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "opening"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A wall-mounted occurrence's offset from its reference.",
+          "properties": {
+            "kind": {
+              "const": "occurrence_offset",
+              "type": "string"
+            },
+            "occurrence": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "occurrence"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A node's stored coordinate (free classes, Q-38).",
+          "properties": {
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "kind": {
+              "const": "node_coordinate",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "node",
+            "axis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A floor or ceiling occurrence's stored center coordinate (Q-38).",
+          "properties": {
+            "axis": {
+              "$ref": "#/$defs/Axis"
+            },
+            "kind": {
+              "const": "occurrence_coordinate",
+              "type": "string"
+            },
+            "occurrence": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "occurrence",
+            "axis"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ErrorCode": {
+      "description": "Stable error codes (Q-50). Never change a code's meaning once released.",
+      "enum": [
+        "BAD_REQUEST",
+        "NOT_A_PROJECT",
+        "PROJECT_EXISTS",
+        "LOCKED",
+        "CORRUPT_PROJECT",
+        "COMMAND_FAILED",
+        "STALE",
+        "ALTERED",
+        "BLOCKED",
+        "NOTHING_TO_UNDO",
+        "NOT_FOUND",
+        "IO"
+      ],
+      "type": "string"
+    },
+    "Flag": {
+      "description": "Something the user should notice before confirming (Q-36).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An added or changed value with source Proposed (6.4, 7.4).",
+          "properties": {
+            "proposed_value": {
+              "properties": {
+                "collection": {
+                  "type": "string"
+                },
+                "id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "collection",
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "proposed_value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An existing element, or one hosted on an existing wall, changes (6.7).",
+          "properties": {
+            "existing_condition_edit": {
+              "properties": {
+                "collection": {
+                  "type": "string"
+                },
+                "id": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "collection",
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "existing_condition_edit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GeometryError": {
+      "description": "Why wall geometry cannot be built.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "unknown_entity": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unknown_entity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The wall's nodes are not on one line in its direction, or it has no length.",
+          "properties": {
+            "bad_wall": {
+              "properties": {
+                "wall": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "wall"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "bad_wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Two walls leave this node in the same direction (Q-19).",
+          "properties": {
+            "same_direction": {
+              "properties": {
+                "node": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "node"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "same_direction"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "overflow",
+          "description": "A coordinate is outside the Length range.",
+          "type": "string"
+        }
+      ]
+    },
+    "ItemSide": {
+      "description": "A side of an occurrence footprint, in the occurrence's own frame.",
+      "enum": [
+        "front",
+        "back",
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "Layer": {
+      "additionalProperties": false,
+      "description": "One material layer.",
+      "properties": {
+        "core": {
+          "type": "boolean"
+        },
+        "material": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Sourced"
+        }
+      },
+      "required": [
+        "material",
+        "thickness",
+        "core"
+      ],
+      "type": "object"
+    },
+    "Length": {
+      "description": "A length in nanometers.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "Motion": {
+      "description": "How far a move goes: a signed delta along the axis, or the target\ncoordinate of the moved reference (Q-39).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/Length"
+            },
+            "kind": {
+              "const": "delta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "target",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/Length"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MoveOccurrence": {
+      "additionalProperties": false,
+      "description": "Moves an occurrence's center along one axis (a wall-mounted item only\nalong its host).",
+      "properties": {
+        "absorb": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "axis": {
+          "$ref": "#/$defs/Axis"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "occurrence": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "occurrence",
+        "axis",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "MoveOpening": {
+      "additionalProperties": false,
+      "description": "Moves an opening along its host; `motion` names its start edge.",
+      "properties": {
+        "absorb": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "opening": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "opening",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "MoveWall": {
+      "additionalProperties": false,
+      "description": "Moves a wall across its axis by editing the dimensions that fix it (8.7).",
+      "properties": {
+        "absorb": {
+          "description": "PolicyChoices taken: dimensions that absorb the move (8.7 (b)).",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The constraint the user picked for a ReferenceSemantics ambiguity."
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference",
+          "description": "The wall's own face or center whose coordinate `motion` names."
+        },
+        "wall": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "wall",
+        "reference",
+        "motion",
+        "absorb"
+      ],
+      "type": "object"
+    },
+    "NoArgs": {
+      "additionalProperties": false,
+      "description": "Arguments of a command whose arguments are not defined yet.",
+      "type": "object"
+    },
+    "OpeningEdge": {
+      "description": "An edge or the center of an opening along its host wall.",
+      "enum": [
+        "start",
+        "end",
+        "center"
+      ],
+      "type": "string"
+    },
+    "OpeningKind": {
+      "description": "What fills an opening.",
+      "enum": [
+        "opening",
+        "door",
+        "window"
+      ],
+      "type": "string"
+    },
+    "OpeningProblem": {
+      "description": "What is wrong with an opening's fit in its host (7.7, Q-22).",
+      "oneOf": [
+        {
+          "const": "non_positive_size",
+          "description": "Width or height is zero or negative.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Closer than the minimum jamb distance to the start of the\nfull-thickness stretch; negative clearance means outside it.",
+          "properties": {
+            "too_close_to_start": {
+              "properties": {
+                "clearance": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "clearance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "too_close_to_start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The same at the end.",
+          "properties": {
+            "too_close_to_end": {
+              "properties": {
+                "clearance": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "clearance"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "too_close_to_end"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The sill is below the wall's base by this much.",
+          "properties": {
+            "below_base": {
+              "properties": {
+                "by": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "below_base"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The head is above the wall's top by this much.",
+          "properties": {
+            "above_top": {
+              "properties": {
+                "by": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "above_top"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Outcome": {
+      "description": "What the solver made of one constraint.",
+      "oneOf": [
+        {
+          "const": "driving",
+          "description": "Merged two classes: it determines something.",
+          "type": "string"
+        },
+        {
+          "const": "redundant",
+          "description": "Driving, but its references were already related and it agrees.",
+          "type": "string"
+        },
+        {
+          "const": "demoted",
+          "description": "A redundant Measured constraint within tolerance: now Reference (7.5).",
+          "type": "string"
+        },
+        {
+          "const": "conflict",
+          "description": "Redundant and disagreeing beyond tolerance; see [`Solution::conflicts`].",
+          "type": "string"
+        },
+        {
+          "const": "reference",
+          "description": "A Reference-status constraint: reported, constrains nothing (7.2).",
+          "type": "string"
+        },
+        {
+          "const": "not_solved",
+          "description": "Not solved by Layer A (MinClearance is checked after solving, 7.1).",
+          "type": "string"
+        }
+      ]
+    },
+    "PolygonError": {
+      "description": "Why a polygon is not a simple rectilinear polygon.",
+      "oneOf": [
+        {
+          "enum": [
+            "too_few_vertices",
+            "non_positive_area"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Edge `edge` (from vertex `edge` to the next) is diagonal or has no length.",
+          "properties": {
+            "not_rectilinear": {
+              "properties": {
+                "edge": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "edge"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "not_rectilinear"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Two edges cross, touch or overlap.",
+          "properties": {
+            "self_intersecting": {
+              "properties": {
+                "first": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "second": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "first",
+                "second"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "self_intersecting"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProjectUnit": {
+      "description": "The unit of a bare number. Stored on the project (Q-9).",
+      "enum": [
+        "inches",
+        "feet"
+      ],
+      "type": "string"
+    },
+    "Proposal": {
+      "description": "The result of `propose` (8.3).",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ProposedAction",
+          "description": "The action as requested."
+        },
+        "ambiguities": {
+          "items": {
+            "$ref": "#/$defs/Ambiguity"
+          },
+          "type": "array"
+        },
+        "base_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/Conflict"
+          },
+          "type": "array"
+        },
+        "consequences": {
+          "description": "Entities that move as a consequence of a move command (8.7).",
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "constraint_status": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ConstraintReport"
+          },
+          "type": "object"
+        },
+        "diff": {
+          "items": {
+            "$ref": "#/$defs/DiffEntry"
+          },
+          "type": "array"
+        },
+        "flags": {
+          "items": {
+            "$ref": "#/$defs/Flag"
+          },
+          "type": "array"
+        },
+        "proposal_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "provisional": {
+          "description": "The resulting model rests on Proposed values (7.4, Q-41).",
+          "type": "boolean"
+        },
+        "resolved": {
+          "$ref": "#/$defs/ProposedAction",
+          "description": "The action with every value explicit: moves become SetConstraintValue\ncommands (Q-39)."
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/Violation"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "base_version",
+        "action",
+        "resolved",
+        "consequences",
+        "provisional",
+        "diff",
+        "constraint_status",
+        "conflicts",
+        "violations",
+        "ambiguities",
+        "flags"
+      ],
+      "type": "object"
+    },
+    "ProposedAction": {
+      "description": "What a proposal would do.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commands": {
+              "items": {
+                "$ref": "#/$defs/Command"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "commands",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "commands"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "undo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "redo",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Reference": {
+      "description": "A geometric reference that dimensions and constraints name (6.2).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "node",
+              "type": "string"
+            },
+            "node": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "node"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`boundary` counts layer boundaries from the `side` finish face\ninward: 0 is that face, the number of layers is the opposite face (Q-16).",
+          "properties": {
+            "boundary": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "wall_face",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/WallSide"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall",
+            "side",
+            "boundary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wall_center",
+              "type": "string"
+            },
+            "wall": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "$ref": "#/$defs/OpeningEdge"
+            },
+            "kind": {
+              "const": "opening_edge",
+              "type": "string"
+            },
+            "opening": {
+              "$ref": "#/$defs/Uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "opening",
+            "edge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_edge",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/ItemSide"
+            }
+          },
+          "required": [
+            "kind",
+            "item",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "item_center",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "item"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "datum": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "datum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "datum"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RoofProblem": {
+      "description": "Why a roof is not well defined.",
+      "oneOf": [
+        {
+          "enum": [
+            "overflow"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "ledger_not_existing_wall_face",
+          "description": "The ledger is not a face of an existing wall (Q-45).",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The footprint's outline cannot be found.",
+          "properties": {
+            "footprint": {
+              "$ref": "#/$defs/SpaceError"
+            }
+          },
+          "required": [
+            "footprint"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "no_run",
+          "description": "The high edge is not before the low side along the slope.",
+          "type": "string"
+        },
+        {
+          "const": "zero_pitch_run",
+          "description": "A pitch with a zero run.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A stated low edge height differs from the one the pitch gives.",
+          "properties": {
+            "pitch_disagrees": {
+              "properties": {
+                "derived": {
+                  "$ref": "#/$defs/Length"
+                },
+                "stated": {
+                  "$ref": "#/$defs/Length"
+                }
+              },
+              "required": [
+                "stated",
+                "derived"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pitch_disagrees"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The ledger face could not be solved.",
+          "properties": {
+            "solve": {
+              "$ref": "#/$defs/SolveError"
+            }
+          },
+          "required": [
+            "solve"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SetConstraintValue": {
+      "additionalProperties": false,
+      "description": "Sets one dimension (8.2). Moves resolve to these.",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/DimensionTarget"
+        },
+        "value": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "target",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SetProjectUnits": {
+      "additionalProperties": false,
+      "description": "Sets the unit of bare numbers.",
+      "properties": {
+        "default_unit": {
+          "$ref": "#/$defs/ProjectUnit"
+        }
+      },
+      "required": [
+        "default_unit"
+      ],
+      "type": "object"
+    },
+    "SetStorey": {
+      "additionalProperties": false,
+      "description": "Creates a storey (`storey` is null) or replaces an existing one.",
+      "properties": {
+        "default_ceiling_height": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "floor_to_floor": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "name": {
+          "type": "string"
+        },
+        "storey": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "elevation",
+        "floor_to_floor",
+        "default_ceiling_height"
+      ],
+      "type": "object"
+    },
+    "SetVariantSelection": {
+      "additionalProperties": false,
+      "description": "Selects one of a variant slot's options.",
+      "properties": {
+        "selected": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "slot": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "slot",
+        "selected"
+      ],
+      "type": "object"
+    },
+    "SetWallLayers": {
+      "additionalProperties": false,
+      "description": "Gives a wall exactly these layers and left extent (Q-43). A layer set\nshared with other walls is copied, so they are untouched.",
+      "properties": {
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/Layer"
+          },
+          "type": "array"
+        },
+        "left_extent": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "wall": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "wall",
+        "layers",
+        "left_extent"
+      ],
+      "type": "object"
+    },
+    "SolveError": {
+      "description": "Why the document cannot be solved at all.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An entity named by a wall or constraint does not exist.",
+          "properties": {
+            "unknown_entity": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unknown_entity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reference has no coordinate on the constraint's axis.",
+          "properties": {
+            "wrong_axis": {
+              "properties": {
+                "constraint": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "constraint"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "wrong_axis"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A WallFace boundary index beyond the wall's layers.",
+          "properties": {
+            "no_such_boundary": {
+              "properties": {
+                "constraint": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "constraint"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "no_such_boundary"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An Equal names something that is not a Distance constraint.",
+          "properties": {
+            "not_a_distance": {
+              "properties": {
+                "constraint": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "target": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "constraint",
+                "target"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "not_a_distance"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "overflow",
+          "description": "A solved coordinate is outside the Length range.",
+          "type": "string"
+        }
+      ]
+    },
+    "Source": {
+      "description": "Where a value came from (spec 7.2).",
+      "enum": [
+        "user_stated",
+        "measured",
+        "derived",
+        "proposed",
+        "imported"
+      ],
+      "type": "string"
+    },
+    "Sourced": {
+      "additionalProperties": false,
+      "description": "A value together with its source (Q-4).",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "value": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "SpaceError": {
+      "description": "Why a space, slab or ceiling outline cannot be found.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "geometry": {
+              "$ref": "#/$defs/GeometryError"
+            }
+          },
+          "required": [
+            "geometry"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "polygon": {
+              "$ref": "#/$defs/PolygonError"
+            }
+          },
+          "required": [
+            "polygon"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "unknown_entity": {
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "unknown_entity"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The seed lies inside a wall.",
+          "properties": {
+            "seed_in_wall": {
+              "properties": {
+                "space": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "space"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "seed_in_wall"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The walls do not enclose the seed.",
+          "properties": {
+            "open": {
+              "properties": {
+                "space": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "space"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "open"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Walls stand free inside the room (Q-25).",
+          "properties": {
+            "island": {
+              "properties": {
+                "space": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "walls": {
+                  "items": {
+                    "$ref": "#/$defs/Uuid"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "space",
+                "walls"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "island"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The region touches itself at a corner, so it is not one simple polygon.",
+          "properties": {
+            "not_simple": {
+              "properties": {
+                "space": {
+                  "$ref": "#/$defs/Uuid"
+                }
+              },
+              "required": [
+                "space"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "not_simple"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "Violation": {
+      "description": "One failed invariant.",
+      "properties": {
+        "acknowledged": {
+          "description": "Marked Acknowledged by the user: reported but not blocking.",
+          "type": "boolean"
+        },
+        "detail": {
+          "$ref": "#/$defs/Detail"
+        },
+        "key": {
+          "$ref": "#/$defs/ViolationKey"
+        }
+      },
+      "required": [
+        "key",
+        "detail",
+        "acknowledged"
+      ],
+      "type": "object"
+    },
+    "ViolationKey": {
+      "additionalProperties": false,
+      "description": "Identifies a violation across solves: its kind and the sorted ids of the\nentities involved (Q-28).",
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/ViolationKind"
+        }
+      },
+      "required": [
+        "kind",
+        "entities"
+      ],
+      "type": "object"
+    },
+    "ViolationKind": {
+      "description": "What a validity violation is about (7.7).",
+      "oneOf": [
+        {
+          "const": "wall_length",
+          "description": "A wall without positive length along its direction.",
+          "type": "string"
+        },
+        {
+          "const": "wall_overlap",
+          "description": "Two walls overlap without a declared join.",
+          "type": "string"
+        },
+        {
+          "const": "opening_outside_host",
+          "description": "An opening is not fully inside its host.",
+          "type": "string"
+        },
+        {
+          "const": "space_outline",
+          "description": "A Space boundary is not a simple rectilinear polygon.",
+          "type": "string"
+        },
+        {
+          "const": "slab_outline",
+          "description": "A Slab boundary is not a simple rectilinear polygon.",
+          "type": "string"
+        },
+        {
+          "const": "roof_definition",
+          "description": "A roof's ledger, footprint, run or heights do not define a roof (Q-44, Q-45).",
+          "type": "string"
+        },
+        {
+          "const": "clearance_zone",
+          "description": "A clearance zone is blocked by a wall or another occurrence (Q-32).",
+          "type": "string"
+        },
+        {
+          "const": "min_clearance",
+          "description": "A MinClearance constraint is not met after solving (7.1, Q-32).",
+          "type": "string"
+        },
+        {
+          "const": "occurrence_overlap",
+          "description": "An occurrence overlaps a wall or another occurrence (Q-27, Q-32).",
+          "type": "string"
+        }
+      ]
+    },
+    "WallSide": {
+      "description": "A side of a wall, looking from node_a to node_b (6.1).",
+      "enum": [
+        "left",
+        "right"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The response every subcommand writes.",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CliError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Proposal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "Response",
+  "type": "object"
+}

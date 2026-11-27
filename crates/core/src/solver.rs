@@ -63,7 +63,8 @@ impl Default for LayerA {
 }
 
 /// What the solver made of one constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Outcome {
     /// Merged two classes: it determines something.
     Driving,
@@ -80,7 +81,7 @@ pub enum Outcome {
 }
 
 /// The solver's report for one constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct ConstraintReport {
     pub outcome: Outcome,
     /// The value in force: the stored value, or the value copied by Equal.
@@ -94,7 +95,7 @@ pub struct ConstraintReport {
 }
 
 /// A redundant constraint that disagrees (7.5).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Conflict {
     /// The constraint later in processing order.
     pub constraint: Uuid,
@@ -105,7 +106,10 @@ pub struct Conflict {
 }
 
 /// Something whose coordinate lies in an underconstrained class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Member {
     /// A node's coordinate on the class's axis.
     Node(Uuid),
@@ -118,14 +122,14 @@ pub enum Member {
 }
 
 /// One underconstrained class: its members move together by one translation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct FreeClass {
     pub axis: Axis,
     pub members: Vec<Member>,
 }
 
 /// The result of a solve.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct Solution {
     /// Every node's position: exact where determined, provisional otherwise.
     pub nodes: BTreeMap<Uuid, Point>,
@@ -185,7 +189,8 @@ impl Solution {
 }
 
 /// Why the document cannot be solved at all.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum SolveError {
     /// An entity named by a wall or constraint does not exist.
     UnknownEntity { id: Uuid },
