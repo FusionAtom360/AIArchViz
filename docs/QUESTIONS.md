@@ -489,7 +489,8 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Recommendation: (a), confirmed at G-4. The Scene Package's collision prisms are unaffected either way.
 - Answer: (a), with UE 5.8 import checked at G-4 and (b) as the fallback (owner, 2026-11-27). This supersedes Q-55 on normals.
 
-## Q-71: Where the Q-67 to Q-70 fixes go (status: open)
+## Q-71: Where the Q-67 to Q-70 fixes go (status: answered)
 - Context: the defects are in T-109 (slabs), T-115 (roof), T-119 (GLB) and the T-121 L-room fixture, not in T-122. CLAUDE.md allows one task per session. G-4 should not run on the current GLBs.
 - Options: (a) add T-122b "Slice geometry fixes" to docs/PLAN.md before G-4, covering the answers to Q-67 to Q-70 and regenerating fixtures and goldens. T-122 stays open until G-4 passes on its output. (b) a separate task per question.
 - Recommendation: (a). The four fixes share the goldens and are checked together at G-4.
+- Answer: (a) T-122b added to docs/PLAN.md before G-4 (owner, 2026-11-27).

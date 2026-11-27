@@ -282,6 +282,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: docs/SLICE.md with the exact steps that regenerate the DXF, GLB and Scene Package for the shop from one command; the S-1 result recorded in docs/DECISIONS.md.
 - Done when: outputs regenerate from one command, and you have completed gates G-3 and G-4 and recorded the outcomes.
 
+**T-122b Slice geometry fixes.** Spec 6, 6.1, 6.5, 7.7, D-4; Q-67 to Q-70, DEC-5, DEC-6. Depends on T-122. Runs before gate G-4.
+
+- Build: slab boundary `FromSpaces { spaces }` out to the bounding walls' far faces (DEC-5); roof heights at the underside with the thickness above, and no overhang on a ledger edge (Q-68); `WallTop::Roof { roof }` with integer, round-half-to-even top edges and the new violations (DEC-6); GLB meshes with shared indexed vertices and no normals (Q-70); the shop and L-room fixtures updated to use them (one slab per contiguous floor, L-room roof bearing on its walls at 120 in with a 2:12 pitch and walls following it, extension walls following the roof); fixtures, goldens and schemas regenerated with `cargo xtask golden`.
+- Done when: in `cargo xtask slice` output, every slab reaches the walls' exterior faces and nothing is open under a door void; no roof passes through a wall or ceiling and the shop roof starts at the east wall's exterior face; no gap between wall tops and roof underside, shown by a test that checks every roof-following wall's top against the underside to the nanometer; each GLB element has one vertex per distinct position and is a closed solid; reversed wall creation order gives identical wall profiles; then gate G-4.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.
