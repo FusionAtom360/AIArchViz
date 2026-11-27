@@ -1,5 +1,6 @@
 //! Workspace tooling: cargo xtask check, golden, ue-build, package.
 
+mod fixtures;
 mod float_lint;
 
 use std::path::{Path, PathBuf};
@@ -7,7 +8,7 @@ use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: cargo xtask <check | golden>
   check   float lint, fmt, clippy, tests, wasm32 build of core, cargo deny
-  golden  regenerate schemas/ (document and cli) and the insta snapshots";
+  golden  regenerate schemas/ (document and cli), fixtures/*/commands.txt and the insta snapshots";
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,6 +87,15 @@ fn golden() -> Result<(), String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for (name, text) in archviz_cli::schemas()? {
             let path = dir.join(name);
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    })?;
+    step("fixtures/*/commands.txt", || {
+        for (name, text) in fixtures::all()? {
+            let dir = root.join("fixtures").join(name);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let path = dir.join("commands.txt");
             std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         }
         Ok(())
