@@ -368,3 +368,32 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) install gltf-validator with npm into a tools folder outside the Rust build (not a crate dependency), run it on the golden GLB, record the result in DECISIONS.md, and also check the GLB in tests with the `gltf` crate (MIT OR Apache-2.0, test-only) so CI checks structure on every push; (b) do not install it: record that in DECISIONS.md and rely on the `gltf` crate in tests.
 - Recommendation: (a). It answers the Done when exactly, and the `gltf` crate keeps a check running in CI.
 - Answer: (a), owner, 2026-11-26.
+
+## Q-57: Package shape, GLB granularity and imported models (T-120, status: answered)
+- Context: 11.3 asks for "a folder or zip" with scene.json, assets/\*.glb and manifest.sha256, each mesh in element-local coordinates placed by a transform. T-119's write_glb puts every element in one GLB. 12.5 (v1.x) applies diffs by stable id. Imported model assets (ElementType.model) are only an id and content hash in the document; no asset store exists yet (Phase 3), so their bytes are not available to a pure writer.
+- Options: (a) a pure `write_scene_package(document) -> Result<BTreeMap<path, bytes>>` in crates/export plus a thin `write_scene_package_dir(document, dir)` that writes the map to a folder (zip later if needed); one GLB per mesh-bearing element at `assets/<element id>.glb`, holding that element's mesh in element-local coordinates with no node transform, built by the same code as T-119 (refactored, write_glb output unchanged); occurrences always get their proxy box GLB, and scene.json records the type's model asset id and content hash for a later task to resolve, with no model bytes copied; (b) one `assets/scene.glb` (the T-119 file) with scene.json transforms duplicating its node translations; (c) as (a) but the writer takes a resolver for model asset bytes now.
+- Recommendation: (a). Per-element files match path C in T-401 (one mesh component per element), keep a reload or diff by id simple, and need nothing that does not exist yet.
+- Answer: (a) per-element GLBs, proxy boxes, model references recorded only (owner, 2026-11-26).
+
+## Q-58: SHA-256 and the manifest format (T-120, status: answered)
+- Context: manifest.sha256 needs SHA-256; the workspace has no hashing crate. ContentHash already uses `sha256:<hex>`.
+- Options: (a) add `sha2` (RustCrypto, MIT OR Apache-2.0, default features off) to archviz-export; manifest.sha256 in `sha256sum` format, one line per file `<64 lowercase hex>  <path>\n`, sorted by path, covering scene.json and every asset but not itself, so `sha256sum -c manifest.sha256` verifies it; tests recompute every hash; (b) the same with our own SHA-256 implementation checked against NIST vectors.
+- Recommendation: (a). A widely reviewed implementation, and a format any machine can check with standard tools.
+- Answer: (a) sha2 crate, sha256sum-format manifest (owner, 2026-11-26).
+
+## Q-59: What scene.json contains (T-120, status: answered)
+- Context: 11.3 lists schema_version, unit, coordinate system, storeys, elements with ids, labels, transforms, footprints (for collision), material slots, variant slots and options, lights and a Proposed-items list; T-120 adds camera bookmarks. 12.1 builds collision only from footprints. Several of these need a concrete form.
+- Options: (a) canonical JSON (sorted keys, no whitespace, core's writer), all lengths integer nanometers in world coordinates (right-handed, X east, Y north, Z up; the UE mapping stays in the plugin), generated from Rust types with schemars into schemas/scene.schema.json by `cargo xtask golden`:
+  - `schema_version` 1, `unit` "nanometer", `coordinate_system` {handedness right, x east, y north, z up};
+  - `project` {id, name}; `storeys` [{id, name, elevation, floor_to_floor, default_ceiling_height}];
+  - `fiducials`: Point datums [{id, name, x, y, z}] (z as in T-119) for S-3;
+  - `elements` [{id, kind (wall, door, window, slab, ceiling, roof, occurrence), label (walls and occurrences; else null), name, storey, mesh ("assets/<id>.glb"), translation [x, y, z] (the lowest corner, as T-119), collision, material_slots {slot name: material id}, plus for occurrences element_type, fidelity, fixed and model {asset id, content_hash} or null}], ordered by kind then id;
+  - `collision`: a list of prisms {outline [[x, y]...] counterclockwise, z_min, z_max}: one per solid wall piece (so door and window voids stay open), none for doors, windows and plain openings, the slab or ceiling outline, the roof's grown footprint from its lowest bottom to its highest top, the occurrence box;
+  - `material_slots`: walls "left" and "right" (the first and last layer's material), slabs "floor" and ceilings "ceiling" (the space's finish when the boundary is a space, else omitted), roofs their own material_slots, occurrences none;
+  - `variant_slots` [{id, owner, kind, options, selected}] as in the document;
+  - `lights` [{id (the occurrence), kind, lumens, kelvin, ies (asset id and content hash, or null), position [x, y, z] at the fixture's footprint center and bottom, direction "down" for spot and rect}];
+  - `proposed_items`: core's proposed_items list as is;
+  - `camera_bookmarks` [{id, name, storey, x, y, z (storey elevation plus eye height), heading_millidegrees, eye_height_proposed}] and `default_walk_start` (id or null);
+  (b) the same with UE coordinates (centimeters, Y flipped) written directly; (c) collision as one footprint per element only, ignoring openings.
+- Recommendation: (a). World nanometers keep the package exact and the plugin owns the one mapping in 5.4; per-piece wall prisms keep doorways walkable without the plugin re-deriving geometry (12.1).
+- Answer: (a) world nanometers, per-piece collision (owner, 2026-11-26).

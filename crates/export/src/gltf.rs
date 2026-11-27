@@ -74,18 +74,29 @@ impl fmt::Display for GltfError {
 impl std::error::Error for GltfError {}
 
 /// A world point in nanometers: x east, y north, z up.
-type P3 = [i128; 3];
+pub(crate) type P3 = [i128; 3];
 /// A plan point in nanometers.
-type P2 = (i128, i128);
+pub(crate) type P2 = (i128, i128);
+
+/// A flat-topped solid for collision (Q-59): a counterclockwise plan outline
+/// between two heights, in world nanometers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Prism {
+    pub(crate) outline: Vec<P2>,
+    pub(crate) z0: i128,
+    pub(crate) z1: i128,
+}
 
 /// One node: a mesh made of planar faces, or an empty node at `at`.
-struct Element {
-    id: Uuid,
-    kind: &'static str,
-    name: String,
+pub(crate) struct Element {
+    pub(crate) id: Uuid,
+    pub(crate) kind: &'static str,
+    pub(crate) name: String,
     extras: Map<String, Value>,
-    faces: Vec<Vec<P3>>,
+    pub(crate) faces: Vec<Vec<P3>>,
     at: P3,
+    /// The solids that make up the element, for collision.
+    pub(crate) prisms: Vec<Prism>,
 }
 
 impl Element {
@@ -97,7 +108,32 @@ impl Element {
             extras: Map::new(),
             faces: Vec::new(),
             at: [0, 0, 0],
+            prisms: Vec::new(),
         }
+    }
+
+    /// Adds a flat-topped prism over `plan` to both the mesh and the
+    /// collision solids; nothing when it has no volume.
+    fn solid(&mut self, plan: &[P2], z0: i128, z1: i128) {
+        let faces = extrude(plan, z0, z1);
+        if let (false, Some(outline)) = (faces.is_empty(), clean(plan)) {
+            self.prisms.push(Prism { outline, z0, z1 });
+        }
+        self.faces.extend(faces);
+    }
+
+    /// The node origin: the lowest corner of the mesh, or `at` without one.
+    pub(crate) fn origin(&self) -> P3 {
+        let Some(first) = self.faces.first().and_then(|f| f.first()) else {
+            return self.at;
+        };
+        let mut m = *first;
+        for p in self.faces.iter().flatten() {
+            for k in 0..3 {
+                m[k] = m[k].min(p[k]);
+            }
+        }
+        m
     }
 }
 
@@ -333,11 +369,10 @@ fn walls_and_openings(doc: &Document) -> Result<(Vec<Element>, Vec<Element>), Gl
         for &(a, b, v) in &voids {
             let sill = i128::from(v.sill.nanometers()).clamp(base, top);
             let head = i128::from(v.head.nanometers()).clamp(base, top);
-            e.faces
-                .extend(extrude(&clip(&plan, along_x, from, Some(a)), base, top));
+            e.solid(&clip(&plan, along_x, from, Some(a)), base, top);
             let span = clip(&plan, along_x, Some(a), Some(b));
-            e.faces.extend(extrude(&span, base, sill));
-            e.faces.extend(extrude(&span, head, top));
+            e.solid(&span, base, sill);
+            e.solid(&span, head, top);
             from = Some(from.map_or(b, |f: i128| f.max(b)));
             let Some(o) = doc.openings.get(&v.opening) else {
                 continue;
@@ -359,8 +394,7 @@ fn walls_and_openings(doc: &Document) -> Result<(Vec<Element>, Vec<Element>), Gl
             d.faces = extrude(&panel, sill, head);
             openings.push(d);
         }
-        e.faces
-            .extend(extrude(&clip(&plan, along_x, from, None), base, top));
+        e.solid(&clip(&plan, along_x, from, None), base, top);
         walls.push(e);
     }
     openings.sort_by_key(|o| o.id);
@@ -374,7 +408,7 @@ fn slabs_and_ceilings(doc: &Document) -> Result<Vec<Element>, GltfError> {
         let plan: Vec<P2> = outline.iter().map(p2).collect();
         let top = storey_elevation(doc, s.storey)? + i128::from(s.elevation.value.nanometers());
         let mut e = Element::new(*id, "slab", format!("slab {id}"));
-        e.faces = extrude(&plan, top - i128::from(s.thickness.value.nanometers()), top);
+        e.solid(&plan, top - i128::from(s.thickness.value.nanometers()), top);
         out.push(e);
     }
     for (id, c) in &doc.ceilings {
@@ -382,7 +416,7 @@ fn slabs_and_ceilings(doc: &Document) -> Result<Vec<Element>, GltfError> {
         let plan: Vec<P2> = outline.iter().map(p2).collect();
         let bottom = storey_elevation(doc, c.storey)? + i128::from(c.elevation.value.nanometers());
         let mut e = Element::new(*id, "ceiling", format!("ceiling {id}"));
-        e.faces = extrude(
+        e.solid(
             &plan,
             bottom,
             bottom + i128::from(c.thickness.value.nanometers()),
@@ -470,6 +504,15 @@ fn roofs(doc: &Document) -> Result<Vec<Element>, GltfError> {
         let t = i128::from(r.thickness.value.nanometers());
         let mut e = Element::new(*id, "roof", format!("roof {id}"));
         e.faces = prism(&grown, |p| top(p) - t, top);
+        // The plane is linear, so its extremes lie at the outline's corners.
+        let heights: Vec<i128> = grown.iter().map(|&p| top(p)).collect();
+        if let (Some(lo), Some(hi)) = (heights.iter().min(), heights.iter().max()) {
+            e.prisms.push(Prism {
+                outline: grown.clone(),
+                z0: lo - t,
+                z1: *hi,
+            });
+        }
         out.push(e);
     }
     Ok(out)
@@ -487,7 +530,7 @@ fn equipment(doc: &Document) -> Result<Vec<Element>, GltfError> {
         if let Some(model) = doc.element_types.get(&o.element_type).and_then(|t| t.model) {
             e.extras.insert("model".into(), json!(model.to_string()));
         }
-        e.faces = extrude(
+        e.solid(
             &rect(a.0, a.1, b.0, b.1),
             i128::from(z0.nanometers()),
             i128::from(z1.nanometers()),
@@ -519,8 +562,8 @@ fn view(bin: &mut Vec<u8>, views: &mut Vec<Value>, bytes: &[u8], target: u32) ->
     views.len() - 1
 }
 
-/// The GLB bytes for `document`. The same document gives the same bytes.
-pub fn write_glb(document: &Document) -> Result<Vec<u8>, GltfError> {
+/// Every element of `document` in node order (see the module docs).
+pub(crate) fn elements(document: &Document) -> Result<Vec<Element>, GltfError> {
     let mut elements = fiducials(document);
     let (walls, openings) = walls_and_openings(document)?;
     elements.extend(walls);
@@ -528,26 +571,35 @@ pub fn write_glb(document: &Document) -> Result<Vec<u8>, GltfError> {
     elements.extend(slabs_and_ceilings(document)?);
     elements.extend(roofs(document)?);
     elements.extend(equipment(document)?);
+    Ok(elements)
+}
 
+/// The GLB bytes for `document`. The same document gives the same bytes.
+pub fn write_glb(document: &Document) -> Result<Vec<u8>, GltfError> {
+    let elements = elements(document)?;
+    encode(&elements.iter().collect::<Vec<_>>(), true)
+}
+
+/// A GLB holding only `element`'s mesh in element-local coordinates, with
+/// no node translation: the Scene Package places it (11.3, Q-57).
+pub(crate) fn element_glb(element: &Element) -> Result<Vec<u8>, GltfError> {
+    encode(&[element], false)
+}
+
+/// Encodes `elements` as one GLB; `place` sets each node's translation to
+/// the element's origin.
+fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
     let (mut bin, mut views, mut accessors, mut meshes, mut nodes) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for e in &elements {
+    for e in elements {
         let mut extras = e.extras.clone();
         extras.insert("id".into(), json!(e.id.to_string()));
         extras.insert("kind".into(), json!(e.kind));
         let mut node = json!({ "name": e.name, "extras": extras });
-        let origin = if e.faces.is_empty() {
-            e.at
-        } else {
-            let mut m = e.faces[0][0];
-            for p in e.faces.iter().flatten() {
-                for k in 0..3 {
-                    m[k] = m[k].min(p[k]);
-                }
-            }
-            m
-        };
-        node["translation"] = json!(to_gltf(origin)?);
+        let origin = e.origin();
+        if place {
+            node["translation"] = json!(to_gltf(origin)?);
+        }
         if !e.faces.is_empty() {
             let (mut positions, mut normals, mut indices) = (
                 Vec::<[f32; 3]>::new(),
@@ -649,4 +701,4 @@ pub fn write_glb(document: &Document) -> Result<Vec<u8>, GltfError> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

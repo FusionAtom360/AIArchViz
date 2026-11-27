@@ -20,3 +20,7 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | insta, proptest | as above | as above | archviz-export (dev) | DXF golden file and number-format property test. |
 | serde_json | 1.0.154 (`std`) | MIT OR Apache-2.0 | archviz-export | Builds the GLB JSON chunk (T-119). |
 | gltf | 1.4.1 (default-features off, `names`, `utils`) | MIT OR Apache-2.0 | archviz-export (dev) | Independent glTF reader that checks the GLB writer in tests (Q-56). Test-only; pulls gltf-json and gltf-derive (MIT OR Apache-2.0) and their proc-macro crates, checked by cargo deny. |
+| sha2 | 0.10.9 (default-features off) | MIT OR Apache-2.0 | archviz-export | SHA-256 for the Scene Package manifest.sha256 (T-120, Q-58). Pulls digest, block-buffer, crypto-common, generic-array, typenum and cpufeatures (MIT or MIT OR Apache-2.0), checked by cargo deny. |
+| serde, schemars | as above | as above | archviz-export | scene.json types and schemas/scene.schema.json (T-120, Q-59). |
+| jsonschema | 0.63.2 (default-features off) | MIT | archviz-export (dev) | Validates scene.json against the generated schema. Test-only. |
+| archviz-export | (workspace) | GPL-3.0-or-later | archviz-xtask | `cargo xtask golden` writes schemas/scene.schema.json. |

@@ -1,0 +1,647 @@
+{
+  "$defs": {
+    "AssetRef": {
+      "additionalProperties": false,
+      "description": "An asset by id and content hash.",
+      "properties": {
+        "asset": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/ContentHash"
+        }
+      },
+      "required": [
+        "asset",
+        "content_hash"
+      ],
+      "type": "object"
+    },
+    "CollisionPrism": {
+      "additionalProperties": false,
+      "description": "A collision solid: a counterclockwise plan outline between two heights.",
+      "properties": {
+        "outline": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/Length"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "z_max": {
+          "$ref": "#/$defs/Length"
+        },
+        "z_min": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "outline",
+        "z_min",
+        "z_max"
+      ],
+      "type": "object"
+    },
+    "Compass": {
+      "enum": [
+        "east",
+        "north",
+        "up"
+      ],
+      "type": "string"
+    },
+    "ContentHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "CoordinateSystem": {
+      "additionalProperties": false,
+      "description": "The world frame (5.4): right-handed, X east, Y north, Z up.",
+      "properties": {
+        "handedness": {
+          "$ref": "#/$defs/Handedness"
+        },
+        "x": {
+          "$ref": "#/$defs/Compass"
+        },
+        "y": {
+          "$ref": "#/$defs/Compass"
+        },
+        "z": {
+          "$ref": "#/$defs/Compass"
+        }
+      },
+      "required": [
+        "handedness",
+        "x",
+        "y",
+        "z"
+      ],
+      "type": "object"
+    },
+    "ElementKind": {
+      "enum": [
+        "wall",
+        "door",
+        "window",
+        "slab",
+        "ceiling",
+        "roof",
+        "occurrence"
+      ],
+      "type": "string"
+    },
+    "Fidelity": {
+      "description": "Asset fidelity tiers (10.1).",
+      "enum": [
+        "exact",
+        "library",
+        "generated",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "Fiducial": {
+      "additionalProperties": false,
+      "description": "A Point datum: a labeled fiducial for conformance checks (S-3, Q-54).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        },
+        "z": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "x",
+        "y",
+        "z"
+      ],
+      "type": "object"
+    },
+    "Handedness": {
+      "enum": [
+        "right"
+      ],
+      "type": "string"
+    },
+    "Length": {
+      "description": "A length in nanometers.",
+      "format": "int64",
+      "type": "integer"
+    },
+    "LightDirection": {
+      "enum": [
+        "down"
+      ],
+      "type": "string"
+    },
+    "LightKind": {
+      "description": "Light emitter kinds (11.3).",
+      "enum": [
+        "point",
+        "spot",
+        "rect"
+      ],
+      "type": "string"
+    },
+    "OccurrenceInfo": {
+      "additionalProperties": false,
+      "description": "What only occurrences carry.",
+      "properties": {
+        "element_type": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/Fidelity"
+        },
+        "fixed": {
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The type's model; the mesh in the package is still its proxy box\nuntil the asset library resolves models (Q-57)."
+        }
+      },
+      "required": [
+        "element_type",
+        "fidelity",
+        "fixed"
+      ],
+      "type": "object"
+    },
+    "Reason": {
+      "description": "Why a parameter is listed.",
+      "oneOf": [
+        {
+          "const": "proposed_default",
+          "description": "It holds a catalog default with source Proposed.",
+          "type": "string"
+        },
+        {
+          "const": "missing",
+          "description": "It has no value and no default (a roof's pitch or low edge, T-115).",
+          "type": "string"
+        }
+      ]
+    },
+    "RequiredParameter": {
+      "description": "One parameter the user should supply or confirm (7.4).",
+      "properties": {
+        "alternatives": {
+          "description": "Other fields that satisfy this one when given instead (e.g. a roof's\nlow edge instead of its pitch).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "collection": {
+          "description": "The document field holding the entity, e.g. \"walls\".",
+          "type": "string"
+        },
+        "entity": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "field": {
+          "description": "JSON pointer to the value within the entity, e.g. \"/layers/0/thickness\".",
+          "type": "string"
+        },
+        "label": {
+          "description": "The entity's label, when it has one (W-007).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proposed": {
+          "description": "The proposed default, as stored (a length in nanometers)."
+        },
+        "proposed_display": {
+          "description": "The proposed default as shown to the user (feet-inches for lengths).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/Reason"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit2"
+        }
+      },
+      "required": [
+        "collection",
+        "entity",
+        "field",
+        "reason",
+        "unit",
+        "alternatives"
+      ],
+      "type": "object"
+    },
+    "SceneBookmark": {
+      "additionalProperties": false,
+      "description": "A named viewpoint (12.6); `z` is the absolute eye height.",
+      "properties": {
+        "eye_height_proposed": {
+          "description": "Whether the eye height is still the Proposed default.",
+          "type": "boolean"
+        },
+        "heading_millidegrees": {
+          "description": "Plan heading in thousandths of a degree, 0 = east, counterclockwise.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "x": {
+          "$ref": "#/$defs/Length"
+        },
+        "y": {
+          "$ref": "#/$defs/Length"
+        },
+        "z": {
+          "$ref": "#/$defs/Length"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "storey",
+        "x",
+        "y",
+        "z",
+        "heading_millidegrees",
+        "eye_height_proposed"
+      ],
+      "type": "object"
+    },
+    "SceneElement": {
+      "additionalProperties": false,
+      "properties": {
+        "collision": {
+          "description": "Solids the runtime builds collision from (12.1). Empty for doors and\nwindows, so their openings stay passable.",
+          "items": {
+            "$ref": "#/$defs/CollisionPrism"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/ElementKind"
+        },
+        "label": {
+          "description": "The human label (W-007, EQ-012) of walls and occurrences.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "material_slots": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "description": "Material per named slot.",
+          "type": "object"
+        },
+        "mesh": {
+          "description": "The element's GLB in the package, e.g. \"assets/<id>.glb\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "occurrence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccurrenceInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "translation": {
+          "description": "Where the mesh's local origin sits in the world: its lowest corner.",
+          "items": {
+            "$ref": "#/$defs/Length"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "storey",
+        "translation",
+        "collision",
+        "material_slots"
+      ],
+      "type": "object"
+    },
+    "SceneLight": {
+      "additionalProperties": false,
+      "description": "A physical light (12.4) at its fixture's footprint center and bottom.",
+      "properties": {
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LightDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Down for spot and rect lights; none for point lights."
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid",
+          "description": "The fixture occurrence."
+        },
+        "ies": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kelvin": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/LightKind"
+        },
+        "lumens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "position": {
+          "items": {
+            "$ref": "#/$defs/Length"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "lumens",
+        "kelvin",
+        "position"
+      ],
+      "type": "object"
+    },
+    "SceneProject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
+    "SceneStorey": {
+      "additionalProperties": false,
+      "properties": {
+        "default_ceiling_height": {
+          "$ref": "#/$defs/Length"
+        },
+        "elevation": {
+          "$ref": "#/$defs/Length"
+        },
+        "floor_to_floor": {
+          "$ref": "#/$defs/Length"
+        },
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "elevation",
+        "floor_to_floor",
+        "default_ceiling_height"
+      ],
+      "type": "object"
+    },
+    "SceneVariantSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "kind": {
+          "$ref": "#/$defs/VariantKind"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/Uuid"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "selected": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "id",
+        "owner",
+        "kind",
+        "options",
+        "selected"
+      ],
+      "type": "object"
+    },
+    "Unit": {
+      "description": "The unit of every length in scene.json.",
+      "enum": [
+        "nanometer"
+      ],
+      "type": "string"
+    },
+    "Unit2": {
+      "description": "The unit a parameter is given in.",
+      "oneOf": [
+        {
+          "enum": [
+            "length",
+            "lumens",
+            "kelvin",
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "pitch",
+          "description": "Rise over run.",
+          "type": "string"
+        }
+      ]
+    },
+    "Uuid": {
+      "description": "An entity identifier. Serialized as a lowercase hyphenated string.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VariantKind": {
+      "description": "What a variant slot swaps.",
+      "enum": [
+        "material",
+        "model",
+        "lighting"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The content of scene.json (11.3, Q-59).",
+  "properties": {
+    "camera_bookmarks": {
+      "items": {
+        "$ref": "#/$defs/SceneBookmark"
+      },
+      "type": "array"
+    },
+    "coordinate_system": {
+      "$ref": "#/$defs/CoordinateSystem"
+    },
+    "default_walk_start": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "elements": {
+      "items": {
+        "$ref": "#/$defs/SceneElement"
+      },
+      "type": "array"
+    },
+    "fiducials": {
+      "items": {
+        "$ref": "#/$defs/Fiducial"
+      },
+      "type": "array"
+    },
+    "lights": {
+      "items": {
+        "$ref": "#/$defs/SceneLight"
+      },
+      "type": "array"
+    },
+    "project": {
+      "$ref": "#/$defs/SceneProject"
+    },
+    "proposed_items": {
+      "description": "Every value still at its Proposed default (7.4, 12.4).",
+      "items": {
+        "$ref": "#/$defs/RequiredParameter"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "storeys": {
+      "items": {
+        "$ref": "#/$defs/SceneStorey"
+      },
+      "type": "array"
+    },
+    "unit": {
+      "$ref": "#/$defs/Unit"
+    },
+    "variant_slots": {
+      "items": {
+        "$ref": "#/$defs/SceneVariantSlot"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "unit",
+    "coordinate_system",
+    "project",
+    "storeys",
+    "fiducials",
+    "elements",
+    "variant_slots",
+    "lights",
+    "proposed_items",
+    "camera_bookmarks"
+  ],
+  "title": "Scene",
+  "type": "object"
+}

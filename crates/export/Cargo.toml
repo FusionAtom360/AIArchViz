@@ -13,8 +13,12 @@ workspace = true
 dxf = "0.6.2"
 gltf = { version = "1.4.1", default-features = false, features = ["names", "utils"] }
 insta = "1.49.0"
+jsonschema = { version = "0.63.2", default-features = false }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [dependencies]
 archviz-core = { version = "0.1.0", path = "../core" }
+schemars = { version = "1.2.3", default-features = false, features = ["std", "derive", "uuid1"] }
+serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+sha2 = { version = "0.10.9", default-features = false }

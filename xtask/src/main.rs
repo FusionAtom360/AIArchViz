@@ -76,6 +76,11 @@ fn golden() -> Result<(), String> {
         let path = root.join("schemas").join("document.schema.json");
         std::fs::write(&path, schema).map_err(|e| format!("{}: {e}", path.display()))
     })?;
+    step("schemas/scene.schema.json", || {
+        let schema = archviz_export::scene_schema_json().map_err(|e| e.to_string())?;
+        let path = root.join("schemas").join("scene.schema.json");
+        std::fs::write(&path, schema).map_err(|e| format!("{}: {e}", path.display()))
+    })?;
     step("schemas/cli/*.schema.json", || {
         let dir = root.join("schemas").join("cli");
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;

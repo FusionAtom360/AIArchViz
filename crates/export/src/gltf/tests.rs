@@ -2,22 +2,22 @@ use super::*;
 use archviz_core::*;
 use serde_json::Value;
 
-const IN: i64 = 25_400_000;
+pub(crate) const IN: i64 = 25_400_000;
 /// Meters per inch.
 const M: f64 = 0.0254;
 
-fn len(nm: i64) -> Length {
+pub(crate) fn len(nm: i64) -> Length {
     Length::from_nanometers(nm)
 }
 
-fn uid(kind: u8, n: u8) -> Uuid {
+pub(crate) fn uid(kind: u8, n: u8) -> Uuid {
     let mut b = [0u8; 16];
     b[0] = kind;
     b[15] = n;
     Uuid::from_bytes(b)
 }
 
-fn user(nm: i64) -> Sourced<Length> {
+pub(crate) fn user(nm: i64) -> Sourced<Length> {
     Sourced {
         value: len(nm),
         source: Source::UserStated,
@@ -28,7 +28,7 @@ fn user(nm: i64) -> Sourced<Length> {
 /// (96,180) (0,180) in inches, so the arms differ in length; 6 in walls; a
 /// door, a window and a plain opening; slab, ceiling and a 2:12 shed roof
 /// over the room; four fiducials; a marker box raised 36 in.
-fn l_room(with_openings: bool) -> Document {
+pub(crate) fn l_room(with_openings: bool) -> Document {
     let mut doc = Document::new(
         Project {
             id: uid(9, 0),
@@ -274,7 +274,7 @@ fn u32_at(b: &[u8], at: usize) -> usize {
 }
 
 /// The JSON and BIN chunks of a GLB.
-fn chunks(b: &[u8]) -> (Value, Vec<u8>) {
+pub(crate) fn chunks(b: &[u8]) -> (Value, Vec<u8>) {
     assert_eq!(&b[0..4], b"glTF");
     assert_eq!(u32_at(b, 4), 2);
     assert_eq!(u32_at(b, 8), b.len());
