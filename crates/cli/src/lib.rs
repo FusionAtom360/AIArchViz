@@ -209,12 +209,24 @@ pub fn run(args: &[String], stdin: &str, host: &mut dyn Host) -> (String, i32) {
             )
         }
     };
-    let text = to_canonical_json(&response).unwrap_or_else(|e| {
-        format!(
-            r#"{{"error":{{"code":"IO","details":null,"message":"{e}"}},"ok":false,"result":null}}"#
-        )
-    });
+    let text = to_canonical_json(&response).unwrap_or_else(|e| fallback_response(&e.to_string()));
     (text, status)
+}
+
+/// The response when canonical serialization fails, built as a JSON value so
+/// the message is escaped (REVIEW-1 M-9). Keys are written in sorted order,
+/// as the canonical writer would.
+fn fallback_response(message: &str) -> String {
+    let value = serde_json::json!({
+        "error": {"code": "IO", "details": null, "message": message},
+        "ok": false,
+        "result": null,
+    });
+    serde_json::to_string(&value).unwrap_or_else(|_| {
+        String::from(
+            r#"{"error":{"code":"IO","details":null,"message":"response serialization failed"},"ok":false,"result":null}"#,
+        )
+    })
 }
 
 const USAGE: &str = "usage: archviz <new|apply|propose|commit|undo|query|solve|validate|required-parameters> <project-folder>";
@@ -479,6 +491,26 @@ mod tests {
                 std::fs::read_to_string(dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
             assert_eq!(on_disk, text, "{name} is stale");
         }
+        Ok(())
+    }
+
+    /// REVIEW-1 M-9: the fallback used when canonical serialization fails
+    /// escapes its message, so stdout is still valid JSON.
+    #[test]
+    fn the_fallback_error_is_valid_json() -> Result<(), String> {
+        let message = "bad \"quote\", back\\slash, bell \u{7}, nul \u{0}, line\nbreak";
+        let text = fallback_response(message);
+        let parsed: Value = serde_json::from_str(&text).map_err(|e| format!("{e}: {text}"))?;
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "error": {"code": "IO", "details": null, "message": message},
+                "ok": false,
+                "result": null,
+            })
+        );
+        assert_eq!(parsed["error"]["message"].as_str(), Some(message));
+        assert!(!text.contains('\n'), "one line: {text}");
         Ok(())
     }
 

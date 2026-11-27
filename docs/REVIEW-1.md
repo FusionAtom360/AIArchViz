@@ -156,7 +156,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Spec:** 9.8 bounds tool results at 8 KB, paginated, for a 500-element project. This is formally Phase 3, but 9.1 and C2 say external harnesses use the CLI now.
 
 ### M-9: The CLI fallback error is built by string formatting
-- **Status: open**, planned as T-199d.
+- **Status: closed** by T-199d (2026-11-27).
 - **Where:** `crates/cli/src/lib.rs:212-216`. If canonical serialization fails, the response is `format!` with `"message":"{e}"`, unescaped.
 - **Impact:** a message containing `"` or `\` gives invalid JSON on stdout, which breaks C2's "JSON out" contract.
 
