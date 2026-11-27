@@ -83,6 +83,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** `new` against a folder that already holds a log, and `new` racing `new`.
 
 ### H-5: DXF and GLB exports do not list Proposed items (spec 7.4 MUST, T-114 Build)
+- **Status: open**, planned as T-195.
 - **Where:**
   - `crates/export/src/dxf.rs:400` and `crates/export/src/gltf.rs:704`: neither file mentions Proposed values.
   - `crates/export/src/scene.rs` does list them (`proposed_items`).

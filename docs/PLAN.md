@@ -312,6 +312,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: `store::create` takes the project lock before it decides anything, then refuses with PROJECT_EXISTS when the folder already holds genesis.json or log.jsonl, and creates both files with create-new semantics so an existing file is never truncated or replaced. A folder holding only project.lock is still a fresh folder.
 - Done when: tests show that `new` against a folder whose log has entries but whose genesis.json is missing gets PROJECT_EXISTS and leaves the log byte-identical; that `new` against an existing project still gets PROJECT_EXISTS; and that concurrent `new` calls on one empty folder leave exactly one winner, every other call getting PROJECT_EXISTS or LOCKED, with the winner's genesis and an empty log on disk.
 
+**T-195 DXF and GLB exports list their Proposed items.** Spec 7.4, 11.1; T-114; REVIEW-1 H-5. Depends on T-194.
+
+- Build: when `proposed_items` is non-empty, `write_dxf` adds a PROPOSED layer holding a left-aligned text block below the drawing's extents: a heading line "PROVISIONAL MODEL: n PROPOSED ITEMS" then one line per item in `proposed_items` order, "<label or entity id> <field> = <proposed default in feet-inches>"; `write_glb` puts the same list, serialized as in scene.json, in the root `extras.proposed_items`. A document with no Proposed items exports exactly as before, and the per-element GLBs of the Scene Package are unchanged (scene.json carries the list).
+- Done when: tests show that each exporter carries every item of `proposed_items` for a provisional document, in order; that supplying the values removes the list; and that the existing DXF and GLB golden files are unchanged.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.
