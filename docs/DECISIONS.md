@@ -125,3 +125,19 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Decision: the inverse of a committed MoveWall, MoveOpening or MoveOccurrence is the same move (same reference, axis, edit and absorb) by minus the displacement measured in the document before the commit, and the inverse of a SetConstraintValue sets the prior value. Committing a command and then its inverse gives a byte-identical document when the offsets the command moves are UserStated and the document holds no acknowledgments. Otherwise two differences remain: an offset that was Measured, Proposed or Imported comes back with its old value but as UserStated, because a move states the dimension (Q-39); and an acknowledgment pruned because the command cleared its violation does not come back, so the inverse brings the violation back unacknowledged and its proposal is blocked (Q-35). An inverse that brings back an unacknowledged violation the command fixed, such as the overlap a clearance_resolve push fixed, is blocked in the same way, though its resolved commands restore the document byte for byte. Undo (8.4) is the exact restore in every case. The inverse of a value that was off the 1/16 in grid is itself off the grid and is refused by the grid rule (5.3) like any user-stated value.
 - Rationale: it changes no command or log format and keeps Q-39; the differences are provenance and acknowledgment bookkeeping, not geometry, and stored-state undo already restores them exactly.
 - Status: approved (owner, Q-75, 2026-11-27)
+
+## DEC-12: BSL-1.0 and 0BSD join the allowed licenses; the app ships no font
+- Date: 2026-11-27
+- Task or spike: T-201 (Q-77)
+- Spec section: D-14, D-19
+- Decision: deny.toml allows BSL-1.0 (eframe's clipboard: clipboard-win, error-code) and 0BSD (the `interprocess` pipe crate: recvmsg, doctest-file), both on the FSF's list of GPL-compatible licenses. eframe is used without `default_fonts`, so epaint_default_fonts (OFL-1.1, Ubuntu-font-1.0) is not in the build; the app loads a font installed with Windows at run time. Bundling a font for the wasm32 build is left to the task that builds it.
+- Rationale: both licenses are short, permissive and GPL-compatible; they keep unsafe FFI out of our code and keep copy and paste in text fields. No font is redistributed.
+- Status: approved (owner, Q-77, 2026-11-27)
+
+## DEC-13: The app writes its pipe name and session token to host.json
+- Date: 2026-11-27
+- Task or spike: T-201 (Q-77)
+- Spec section: 3.1
+- Decision: while the app has a project open, it writes `host.json` (pipe name and a random 256-bit session token) next to project.lock, and deletes it when the project closes. A client reads it to attach; a request with any other token is refused. Under the CLAUDE.md rule "Never write secrets (API keys, tokens) to files", this token is a local capability that lasts as long as the app's session, not a credential for an outside service. API keys and other credentials stay under the rule. "Save" in the app is "Save a copy as" (genesis.json and log.jsonl copied to a new folder); autosave is the existing rule that a commit is flushed to log.jsonl before it is answered; an uncommitted proposal is not saved.
+- Rationale: a client started on its own has no other way to learn the token without a manual step on every call; any process that can read host.json can already read and replace the project's files.
+- Status: approved (owner, Q-77, 2026-11-27)

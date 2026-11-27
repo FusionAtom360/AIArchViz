@@ -31,7 +31,8 @@
         "BLOCKED",
         "NOTHING_TO_UNDO",
         "NOT_FOUND",
-        "IO"
+        "IO",
+        "UNAUTHORIZED"
       ],
       "type": "string"
     }

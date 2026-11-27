@@ -7,6 +7,7 @@
 //! The exit status is 0 on success and fixed per error code. Ids and
 //! timestamps the request leaves out are generated here, never in core.
 
+pub mod host;
 pub mod store;
 
 use std::path::Path;
@@ -38,6 +39,7 @@ pub enum ErrorCode {
     NothingToUndo,
     NotFound,
     Io,
+    Unauthorized,
 }
 
 impl ErrorCode {
@@ -56,6 +58,7 @@ impl ErrorCode {
             ErrorCode::NothingToUndo => 11,
             ErrorCode::NotFound => 12,
             ErrorCode::Io => 13,
+            ErrorCode::Unauthorized => 14,
         }
     }
 }
@@ -186,9 +189,35 @@ pub trait Host {
     fn new_uuid(&mut self) -> Uuid;
 }
 
-/// Runs one invocation: returns the JSON response and the exit status.
+/// Runs one invocation on the project files: returns the JSON response and
+/// the exit status.
 pub fn run(args: &[String], stdin: &str, host: &mut dyn Host) -> (String, i32) {
-    let (response, status) = match dispatch(args, stdin, host) {
+    respond(dispatch(args, stdin, host))
+}
+
+/// Runs one invocation against a project a host already holds open (3.1).
+/// The folder argument is not used: the client found the host through it.
+/// `new` is refused, since the folder already holds this project.
+pub fn run_on(
+    project: &mut store::Project,
+    args: &[String],
+    stdin: &str,
+    host: &mut dyn Host,
+) -> (String, i32) {
+    let result = match args {
+        [sub, _] if sub == "new" => Err(CliError::new(
+            ErrorCode::ProjectExists,
+            "the app has this project open".to_string(),
+        )),
+        [sub, _] => parse_request(sub, stdin).and_then(|req| execute(project, req, host)),
+        _ => Err(bad(USAGE.to_string())),
+    };
+    respond(result)
+}
+
+/// The response text and exit status for a result.
+pub(crate) fn respond(result: Result<Value, CliError>) -> (String, i32) {
+    let (response, status) = match result {
         Ok(result) => (
             Response {
                 ok: true,
@@ -291,48 +320,98 @@ fn commit_to(
     })
 }
 
+/// Creates a project folder (`new`).
+pub fn new_project(
+    dir: &Path,
+    req: NewRequest,
+    host: &mut dyn Host,
+) -> Result<NewResult, CliError> {
+    let project_id = req.project_id.unwrap_or_else(|| host.new_uuid());
+    let building_id = req.building_id.unwrap_or_else(|| host.new_uuid());
+    let genesis = Document::new(
+        ProjectInfo {
+            id: project_id,
+            name: req.name,
+            default_unit: ProjectUnit::Inches,
+        },
+        Building {
+            id: building_id,
+            name: req.building,
+        },
+    );
+    store::create(dir, &genesis)?;
+    Ok(NewResult {
+        project_id,
+        building_id,
+        version: 0,
+    })
+}
+
+/// A parsed request for a subcommand that works on an open project.
+enum Request {
+    Apply(ApplyRequest),
+    Propose(ProposeRequest),
+    Commit(CommitRequest),
+    Undo(UndoRequest),
+    Query(QueryRequest),
+    Solve,
+    Validate,
+    RequiredParameters,
+}
+
+/// Parses the request of a subcommand other than `new`, before the project
+/// is opened.
+fn parse_request(sub: &str, stdin: &str) -> Result<Request, CliError> {
+    Ok(match sub {
+        "apply" => Request::Apply(parse(stdin)?),
+        "propose" => Request::Propose(parse(stdin)?),
+        "commit" => Request::Commit(parse(stdin)?),
+        "undo" => Request::Undo(parse(stdin)?),
+        "query" => Request::Query(parse(stdin)?),
+        "solve" => {
+            let _: EmptyRequest = parse(stdin)?;
+            Request::Solve
+        }
+        "validate" => {
+            let _: EmptyRequest = parse(stdin)?;
+            Request::Validate
+        }
+        "required-parameters" => {
+            let _: EmptyRequest = parse(stdin)?;
+            Request::RequiredParameters
+        }
+        other => return Err(bad(format!("unknown subcommand {other:?}; {USAGE}"))),
+    })
+}
+
 fn dispatch(args: &[String], stdin: &str, host: &mut dyn Host) -> Result<Value, CliError> {
     let [sub, dir] = args else {
         return Err(bad(USAGE.to_string()));
     };
     let dir = Path::new(dir);
-    match sub.as_str() {
-        "new" => {
-            let req: NewRequest = parse(stdin)?;
-            let project_id = req.project_id.unwrap_or_else(|| host.new_uuid());
-            let building_id = req.building_id.unwrap_or_else(|| host.new_uuid());
-            let genesis = Document::new(
-                ProjectInfo {
-                    id: project_id,
-                    name: req.name,
-                    default_unit: ProjectUnit::Inches,
-                },
-                Building {
-                    id: building_id,
-                    name: req.building,
-                },
-            );
-            store::create(dir, &genesis)?;
-            value(&NewResult {
-                project_id,
-                building_id,
-                version: 0,
-            })
-        }
-        "apply" => {
-            let req: ApplyRequest = parse(stdin)?;
-            let mut project = store::open(dir)?;
+    if sub == "new" {
+        return value(&new_project(dir, parse(stdin)?, host)?);
+    }
+    let req = parse_request(sub, stdin)?;
+    let mut project = store::open(dir)?;
+    execute(&mut project, req, host)
+}
+
+/// Runs a parsed request on an open project.
+fn execute(
+    project: &mut store::Project,
+    req: Request,
+    host: &mut dyn Host,
+) -> Result<Value, CliError> {
+    match req {
+        Request::Apply(req) => {
             let proposal = propose(&project.history, &req.action).map_err(propose_error)?;
-            commit_to(&mut project, proposal, req.timestamp_ms, req.actor, host)
+            commit_to(project, proposal, req.timestamp_ms, req.actor, host)
         }
-        "propose" => {
-            let req: ProposeRequest = parse(stdin)?;
-            let project = store::open(dir)?;
+        Request::Propose(req) => {
             value(&propose(&project.history, &req.action).map_err(propose_error)?)
         }
-        "commit" => {
-            let req: CommitRequest = parse(stdin)?;
-            let mut project = store::open(dir)?;
+        Request::Commit(req) => {
             let head = project.history.version();
             if req.base_version != head {
                 let mut e = commit_error(CommitError::Stale {
@@ -348,18 +427,14 @@ fn dispatch(args: &[String], stdin: &str, host: &mut dyn Host) -> Result<Value, 
             if fresh.proposal_id != req.proposal_id {
                 return Err(commit_error(CommitError::Altered));
             }
-            commit_to(&mut project, fresh, req.timestamp_ms, req.actor, host)
+            commit_to(project, fresh, req.timestamp_ms, req.actor, host)
         }
-        "undo" => {
-            let req: UndoRequest = parse(stdin)?;
-            let mut project = store::open(dir)?;
+        Request::Undo(req) => {
             let proposal =
                 propose(&project.history, &ProposedAction::Undo).map_err(propose_error)?;
-            commit_to(&mut project, proposal, req.timestamp_ms, req.actor, host)
+            commit_to(project, proposal, req.timestamp_ms, req.actor, host)
         }
-        "query" => {
-            let req: QueryRequest = parse(stdin)?;
-            let project = store::open(dir)?;
+        Request::Query(req) => {
             let doc = value(project.history.document())?;
             let not_found = |what: String| CliError::new(ErrorCode::NotFound, what);
             match (req.collection, req.id) {
@@ -380,17 +455,13 @@ fn dispatch(args: &[String], stdin: &str, host: &mut dyn Host) -> Result<Value, 
                 }
             }
         }
-        "solve" => {
-            let _: EmptyRequest = parse(stdin)?;
-            let project = store::open(dir)?;
+        Request::Solve => {
             let solution = LayerA::default()
                 .solve(project.history.document())
                 .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
             value(&solution)
         }
-        "validate" => {
-            let _: EmptyRequest = parse(stdin)?;
-            let project = store::open(dir)?;
+        Request::Validate => {
             let violations = validate(project.history.document(), MIN_JAMB_DISTANCE)
                 .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
             value(&ValidateResult {
@@ -398,9 +469,7 @@ fn dispatch(args: &[String], stdin: &str, host: &mut dyn Host) -> Result<Value, 
                 violations,
             })
         }
-        "required-parameters" => {
-            let _: EmptyRequest = parse(stdin)?;
-            let project = store::open(dir)?;
+        Request::RequiredParameters => {
             let doc = project.history.document();
             let parameters = required_parameters(doc)
                 .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
@@ -409,7 +478,6 @@ fn dispatch(args: &[String], stdin: &str, host: &mut dyn Host) -> Result<Value, 
                 parameters,
             })
         }
-        other => Err(bad(format!("unknown subcommand {other:?}; {USAGE}"))),
     }
 }
 
@@ -530,8 +598,9 @@ mod tests {
             NothingToUndo,
             NotFound,
             Io,
+            Unauthorized,
         ];
         let statuses: Vec<i32> = all.iter().map(|c| c.exit_status()).collect();
-        assert_eq!(statuses, (2..=13).collect::<Vec<_>>());
+        assert_eq!(statuses, (2..=14).collect::<Vec<_>>());
     }
 }

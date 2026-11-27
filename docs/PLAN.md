@@ -56,7 +56,7 @@ The repository is one Cargo workspace plus an Unreal project, licensed GPLv3 at 
 | ue/ArchVizHost | Host | UE 5.8 C++ project that hosts the plugin. |
 | docs | Documents | The files in section 1. |
 
-Dependency rule: every dependency must be GPLv3-compatible. The allowed license list in deny.toml is MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, CC0-1.0 and Unicode-3.0, enforced by cargo-deny. Crates likely to be used, each to be license-checked before adoption: serde, serde\_json, uuid, thiserror, clap, proptest, insta, eframe and egui, wgpu, image, keyring, windows. Claude Code records every dependency in docs/DEPENDENCIES.md.
+Dependency rule: every dependency must be GPLv3-compatible. The allowed license list in deny.toml is MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, CC0-1.0, Unicode-3.0, BSL-1.0 and 0BSD (DEC-12), enforced by cargo-deny. Crates likely to be used, each to be license-checked before adoption: serde, serde\_json, uuid, thiserror, clap, proptest, insta, eframe and egui, wgpu, image, keyring, windows. Claude Code records every dependency in docs/DEPENDENCIES.md.
 
 ## 3. Working rules
 

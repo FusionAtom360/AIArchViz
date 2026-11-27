@@ -19,6 +19,8 @@ schemars = { version = "1.2.3", default-features = false, features = ["std", "de
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 uuid = { version = "1.29.3", default-features = false, features = ["std", "v4", "serde"] }
+interprocess = { version = "2.4.10", default-features = false }
+getrandom = { version = "0.4.3", default-features = false }
 
 [dev-dependencies]
 insta = "1.49.0"

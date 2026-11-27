@@ -66,6 +66,14 @@ fn lock(dir: &Path) -> Result<File, CliError> {
 /// taken before anything is checked, and neither file is ever replaced: a
 /// folder that holds either one already holds a project (REVIEW-1 H-4).
 pub fn create(dir: &Path, genesis: &Document) -> Result<(), CliError> {
+    let text = to_canonical_json(genesis)
+        .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
+    write_new(dir, text.as_bytes(), b"")
+}
+
+/// Writes genesis.json and log.jsonl into `dir` under its lock, refusing a
+/// folder that already holds either file.
+fn write_new(dir: &Path, genesis: &[u8], log: &[u8]) -> Result<(), CliError> {
     std::fs::create_dir_all(dir).map_err(io)?;
     let _lock = lock(dir)?;
     let exists = || {
@@ -79,8 +87,6 @@ pub fn create(dir: &Path, genesis: &Document) -> Result<(), CliError> {
             return Err(exists());
         }
     }
-    let text = to_canonical_json(genesis)
-        .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
     let create_new = |name: &str| {
         OpenOptions::new()
             .write(true)
@@ -91,10 +97,10 @@ pub fn create(dir: &Path, genesis: &Document) -> Result<(), CliError> {
                 _ => io(e),
             })
     };
-    create_new(GENESIS)?
-        .write_all(text.as_bytes())
-        .map_err(io)?;
-    create_new(LOG)?;
+    create_new(GENESIS)?.write_all(genesis).map_err(io)?;
+    let mut file = create_new(LOG)?;
+    file.write_all(log).map_err(io)?;
+    file.sync_data().map_err(io)?;
     Ok(())
 }
 
@@ -129,6 +135,23 @@ pub fn open(dir: &Path) -> Result<Project, CliError> {
 }
 
 impl Project {
+    /// The project folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// "Save a copy as" (Q-77, DEC-13): writes this project's genesis and
+    /// committed log into `dest`, which must not hold a project already.
+    pub fn copy_to(&self, dest: &Path) -> Result<(), CliError> {
+        let genesis = std::fs::read(self.dir.join(GENESIS)).map_err(io)?;
+        let log = std::fs::read(self.dir.join(LOG)).map_err(io)?;
+        let len = usize::try_from(self.log_len).map_err(|e| io(std::io::Error::other(e)))?;
+        let log = log
+            .get(..len)
+            .ok_or_else(|| io(std::io::Error::other("the log is shorter than committed")))?;
+        write_new(dest, &genesis, log)
+    }
+
     /// Appends one committed entry to the log and flushes it to disk, first
     /// truncating any torn append after the committed part.
     pub fn append(&mut self, entry: &LogEntry) -> Result<(), CliError> {
@@ -215,6 +238,32 @@ mod tests {
             assert!(log.is_empty(), "round {round}");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// Q-77 (x): "Save a copy as" writes the committed project into a new
+    /// folder, leaves out a torn append, and never overwrites a project.
+    #[test]
+    fn a_copy_holds_the_committed_project_and_never_overwrites() {
+        let base = std::env::temp_dir().join(format!("archviz-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (src, dest) = (base.join("src"), base.join("dest"));
+        create(&src, &genesis(1)).unwrap_or_else(|e| panic!("{e:?}"));
+        std::fs::write(src.join(LOG), b"{\"torn\"").unwrap_or_else(|e| panic!("{e}"));
+        let project = super::open(&src).unwrap_or_else(|e| panic!("{e:?}"));
+        project.copy_to(&dest).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            std::fs::read(dest.join(GENESIS)).ok(),
+            std::fs::read(src.join(GENESIS)).ok()
+        );
+        assert_eq!(std::fs::read(dest.join(LOG)).ok(), Some(Vec::new()));
+        let again = project.copy_to(&dest).err().map(|e| e.code);
+        assert_eq!(again, Some(ErrorCode::ProjectExists));
+        let into_itself = project.copy_to(&src).err().map(|e| e.code);
+        assert_eq!(into_itself, Some(ErrorCode::Locked));
+        let copy = super::open(&dest).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(copy.history.document(), project.history.document());
+        drop((project, copy));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
