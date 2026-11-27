@@ -775,7 +775,7 @@
       "type": "object"
     },
     "Length": {
-      "description": "A length in nanometers. Serialized as a bare JSON integer.",
+      "description": "A length in nanometers.",
       "format": "int64",
       "type": "integer"
     },

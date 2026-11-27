@@ -231,3 +231,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) a function that builds an ElementType box from a name, width, depth, height and authority, with fidelity Proxy, no model, empty properties, source "parametric box" and license "n/a"; PlaceOccurrence stays NotYetImplemented for a later task, and MoveOccurrence stays with T-113; (b) also implement PlaceOccurrence now.
 - Recommendation: (a). T-111's Done when is about solving and checking placed items, which tests can build directly.
 - Answer: (a) function only (owner, 2026-11-26).
+
+## Q-34: Where a proposal lives between propose and commit (T-112, status: answered)
+- Context: 8.3: "Nothing is persisted by propose"; 8.4: commit(proposal_id) succeeds only if base_version equals head. Core has no I/O and no store.
+- Options: (a) propose returns a Proposal value and keeps nothing; the caller (app, CLI, MCP server) holds it and passes it to commit; proposal_id is the UUIDv5 of the base version and the resolved action, so it is deterministic, and commit recomputes it to make sure the proposal was not altered; (b) core keeps an in-memory table of pending proposals keyed by id inside a session object.
+- Recommendation: (a). It is pure, it makes "propose persists nothing" literally true, and the id still identifies the proposal exactly; the hosts in T-114 and later can keep their own table of ids.
+- Answer: (a) the caller holds the proposal; deterministic id (owner, 2026-11-26).
+
+## Q-35: The commit pipeline and what blocks a commit (T-112, status: answered)
+- Context: until now a Commit event only applied commands; solving, join types and space boundaries were separate functions. A committed document should be fully derived, and replay must give the same bytes. 7.7 says unacknowledged violations block commit; 9.2 says unresolved Referent, Direction and ReferenceSemantics ambiguities block it; 7.5 says a Conflict is for the user to decide.
+- Options: (a) every commit, and every replay of one, applies the commands and then derives: solve and write back positions, store join types, store space boundaries (a space whose boundary cannot be derived keeps its previous one and shows up as a violation); propose runs the same pipeline; commit is refused while the proposal has an unacknowledged violation, a solver Conflict, or a blocking ambiguity; (b) the same, but solver Conflicts do not block.
+- Recommendation: (a). A conflicted model has no consistent geometry, and committing it would store positions that no constraint set explains.
+- Answer: (a) derive on every commit and replay; violations, Conflicts and blocking ambiguities block (owner, 2026-11-26).
+
+## Q-36: Diff, flags and ambiguities in T-112 (T-112, status: answered)
+- Context: 8.3 asks for a diff "per entity, before and after, in nanometers and display units", plus ambiguities and flags; 9.2 defines ambiguity kinds; 6.7 defines ExistingConditionEdit; 7.4 and 9.4 care about Proposed values. JSON alone cannot tell a length from another integer.
+- Options: (a) the diff has one entry per changed entity: entity maps by collection and id, and project, building, labels, acknowledged and default_walk_start as single entries; each entry says added, removed or changed and carries the whole entity before and after in nanometers and in display form (every Length shown as feet-inches-fractions), plus the JSON paths that changed. Lengths are found through the JSON Schema, where Length becomes a named definition (schema change). Flags: ProposedValue for every changed or added field whose source is Proposed, and ExistingConditionEdit for a changed or removed entity with function existing, or hosted on such a wall. The Ambiguity type follows 9.2 exactly, and the list stays empty until T-113 resolves moves; (b) a diff of changed fields only, without whole entities.
+- Recommendation: (a). Whole entities make the diff self-explanatory to the user and the agent, and finding lengths by schema keeps one source of truth for which values are lengths.
+- Answer: (a) whole entities in nm and display units, lengths found via the schema (owner, 2026-11-26).

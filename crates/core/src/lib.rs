@@ -9,6 +9,7 @@ mod identity;
 mod items;
 mod length;
 mod log;
+mod proposal;
 mod solver;
 mod space;
 mod units;
@@ -29,6 +30,10 @@ pub use identity::{Label, LabelAllocator, LabelError, PROJECT_NAMESPACE, Uuid};
 pub use items::{Rect, clearance_zone, footprint, height_range, proxy_box};
 pub use length::{Length, LengthError};
 pub use log::{Event, History, LogEntry, LogError, Snapshot, log_from_jsonl, log_to_jsonl};
+pub use proposal::{
+    Ambiguity, AmbiguityKind, Change, CommitError, DeriveError, Derived, DiffEntry, Flag, Proposal,
+    ProposeError, ProposedAction, commit, derive, propose,
+};
 pub use solver::{
     Conflict, ConstraintReport, FreeClass, LayerA, Member, Outcome, Solution, SolveError, Solver,
 };

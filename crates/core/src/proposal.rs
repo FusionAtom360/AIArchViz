@@ -1,0 +1,943 @@
+//! Proposals and commit (spec 8.3, 8.4, 9.2; Q-34 to Q-36).
+//!
+//! `propose` applies an action to a copy of the head document, derives
+//! everything (solve, positions, join types, space boundaries, validation),
+//! and reports what would change. It stores nothing: the caller holds the
+//! [`Proposal`] and passes it to `commit` (Q-34). The proposal id is the
+//! UUIDv5 of the base version and the resolved action, so `commit` can check
+//! the proposal is unaltered by proposing again and comparing.
+//!
+//! `commit` succeeds only when the base version is the head version and
+//! nothing blocks: no unacknowledged violation, no solver Conflict, no
+//! Referent, Direction or ReferenceSemantics ambiguity (Q-35). It appends
+//! one log event atomically.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::canonical::{CanonicalError, to_canonical_json};
+use crate::command::{Action, Command, CommandError, CreateOpening, apply};
+use crate::defaults::{MIN_JAMB_DISTANCE, opening_size};
+use crate::document::{Document, Function, Placement, Source, Sourced};
+use crate::geometry::{GeometryError, update_joins};
+use crate::identity::{PROJECT_NAMESPACE, Uuid};
+use crate::length::Length;
+use crate::log::{Event, History, LogEntry, LogError};
+use crate::solver::{Conflict, ConstraintReport, LayerA, Solution, SolveError, Solver};
+use crate::space::space_boundary;
+use crate::units::format_length;
+use crate::validity::{Violation, prune_acknowledged, validate};
+
+/// Why a document could not be derived after an edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeriveError {
+    Solve(SolveError),
+    Geometry(GeometryError),
+}
+
+impl fmt::Display for DeriveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeriveError::Solve(e) => write!(f, "cannot solve: {e}"),
+            DeriveError::Geometry(e) => write!(f, "cannot check geometry: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for DeriveError {}
+
+/// A derived document with its solution and violations.
+pub struct Derived {
+    pub document: Document,
+    pub solution: Solution,
+    pub violations: Vec<Violation>,
+}
+
+/// Solves `document` and stores everything derived from the solution:
+/// positions, join types, space boundaries (a space whose boundary cannot
+/// be derived keeps its previous one and appears as a violation), then
+/// validates and prunes acknowledgments of violations that are gone (Q-35).
+pub fn derive(document: Document) -> Result<Derived, DeriveError> {
+    let mut doc = document;
+    let solution = LayerA::default().solve(&doc).map_err(DeriveError::Solve)?;
+    solution.apply_to(&mut doc);
+    // Bad walls make join types underivable; validation reports them.
+    let _ = update_joins(&mut doc);
+    let spaces: Vec<Uuid> = doc.spaces.keys().copied().collect();
+    for id in spaces {
+        if let Ok(boundary) = space_boundary(&doc, id)
+            && let Some(space) = doc.spaces.get_mut(&id)
+        {
+            space.boundary = boundary;
+        }
+    }
+    let violations = validate(&doc, MIN_JAMB_DISTANCE).map_err(DeriveError::Geometry)?;
+    prune_acknowledged(&mut doc, &violations);
+    Ok(Derived {
+        document: doc,
+        solution,
+        violations,
+    })
+}
+
+/// What a proposal would do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProposedAction {
+    Commands { commands: Vec<Command> },
+    Undo,
+    Redo,
+}
+
+/// Ambiguity kinds (9.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmbiguityKind {
+    Referent,
+    Direction,
+    Magnitude,
+    ReferenceSemantics,
+    PolicyChoice,
+}
+
+impl AmbiguityKind {
+    /// Whether an unresolved ambiguity of this kind blocks commit (9.2).
+    pub fn blocks_commit(self) -> bool {
+        matches!(
+            self,
+            AmbiguityKind::Referent | AmbiguityKind::Direction | AmbiguityKind::ReferenceSemantics
+        )
+    }
+}
+
+/// An unresolved choice (9.2): {kind, candidates, default if any}.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ambiguity {
+    pub kind: AmbiguityKind,
+    pub candidates: Vec<String>,
+    pub default: Option<String>,
+}
+
+/// Something the user should notice before confirming (Q-36).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Flag {
+    /// An added or changed value with source Proposed (6.4, 7.4).
+    ProposedValue {
+        collection: String,
+        id: Option<Uuid>,
+        path: String,
+    },
+    /// An existing element, or one hosted on an existing wall, changes (6.7).
+    ExistingConditionEdit { collection: String, id: Uuid },
+}
+
+/// How an entity changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    Added,
+    Removed,
+    Changed,
+}
+
+/// One changed entity, before and after, in nanometers and display units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffEntry {
+    /// The document field, e.g. "walls"; singletons such as "project" have no id.
+    pub collection: String,
+    pub id: Option<Uuid>,
+    pub change: Change,
+    pub before: Option<Value>,
+    pub after: Option<Value>,
+    /// The same values with every Length shown in feet-inches-fractions.
+    pub before_display: Option<Value>,
+    pub after_display: Option<Value>,
+    /// JSON pointers, within the entity, of every value that differs.
+    pub changed_paths: Vec<String>,
+}
+
+/// The result of `propose` (8.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Proposal {
+    pub proposal_id: Uuid,
+    pub base_version: u64,
+    /// The action with every value explicit.
+    pub resolved: ProposedAction,
+    pub diff: Vec<DiffEntry>,
+    pub constraint_status: BTreeMap<Uuid, ConstraintReport>,
+    pub conflicts: Vec<Conflict>,
+    pub violations: Vec<Violation>,
+    pub ambiguities: Vec<Ambiguity>,
+    pub flags: Vec<Flag>,
+}
+
+impl Proposal {
+    /// Whether anything stops this proposal from being committed (Q-35).
+    pub fn blocked(&self) -> bool {
+        self.violations.iter().any(|v| !v.acknowledged)
+            || !self.conflicts.is_empty()
+            || self.ambiguities.iter().any(|a| a.kind.blocks_commit())
+    }
+}
+
+/// Why a proposal could not be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProposeError {
+    Command { index: usize, error: CommandError },
+    Derive(DeriveError),
+    NothingToUndo,
+    NothingToRedo,
+    Json(CanonicalError),
+}
+
+impl fmt::Display for ProposeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProposeError::Command { index, error } => write!(f, "command {index}: {error}"),
+            ProposeError::Derive(e) => write!(f, "{e}"),
+            ProposeError::NothingToUndo => f.write_str("nothing to undo"),
+            ProposeError::NothingToRedo => f.write_str("nothing to redo"),
+            ProposeError::Json(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ProposeError {}
+
+/// Why a commit was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitError {
+    /// The head moved since the proposal was made; propose again (8.4).
+    Stale {
+        base_version: u64,
+        head_version: u64,
+    },
+    /// The proposal does not match its id.
+    Altered,
+    /// Violations, Conflicts or ambiguities block it (Q-35).
+    Blocked,
+    Propose(ProposeError),
+    Log(LogError),
+}
+
+impl fmt::Display for CommitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommitError::Stale {
+                base_version,
+                head_version,
+            } => write!(
+                f,
+                "proposal is based on version {base_version} but the head is {head_version}"
+            ),
+            CommitError::Altered => f.write_str("the proposal does not match its id"),
+            CommitError::Blocked => {
+                f.write_str("unacknowledged violations, conflicts or ambiguities block commit")
+            }
+            CommitError::Propose(e) => write!(f, "{e}"),
+            CommitError::Log(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for CommitError {}
+
+/// Fills every value a command leaves to defaults, so it is explicit (8.3).
+fn resolve(command: &Command) -> Command {
+    let mut c = command.clone();
+    if let Action::CreateOpening(args) = &mut c.action {
+        let d = opening_size(args.kind);
+        let fill = |v: &mut Option<Sourced<Length>>, value| {
+            if v.is_none() {
+                *v = Some(Sourced {
+                    value,
+                    source: Source::Proposed,
+                });
+            }
+        };
+        let CreateOpening {
+            width,
+            height,
+            sill,
+            ..
+        } = args;
+        fill(width, d.width);
+        fill(height, d.height);
+        fill(sill, d.sill);
+    }
+    c
+}
+
+fn proposal_id(base_version: u64, action: &ProposedAction) -> Result<Uuid, CanonicalError> {
+    let text = to_canonical_json(action)?;
+    Ok(Uuid::derive(
+        PROJECT_NAMESPACE,
+        "proposal",
+        &format!("{base_version}:{text}"),
+    ))
+}
+
+/// Proposes `action` against the head of `history`. Stores nothing.
+pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, ProposeError> {
+    let base = history.document();
+    let (resolved, after, solution, violations) = match action {
+        ProposedAction::Commands { commands } => {
+            let resolved: Vec<Command> = commands.iter().map(resolve).collect();
+            let mut next = base.clone();
+            for (index, c) in resolved.iter().enumerate() {
+                next = apply(&next, c).map_err(|error| ProposeError::Command { index, error })?;
+            }
+            let d = derive(next).map_err(ProposeError::Derive)?;
+            (
+                ProposedAction::Commands { commands: resolved },
+                d.document,
+                d.solution,
+                d.violations,
+            )
+        }
+        ProposedAction::Undo | ProposedAction::Redo => {
+            let target = match action {
+                ProposedAction::Undo => history.peek_undo().ok_or(ProposeError::NothingToUndo)?,
+                _ => history.peek_redo().ok_or(ProposeError::NothingToRedo)?,
+            };
+            // Undo and redo restore a stored state exactly; report on it as is.
+            let solution = LayerA::default()
+                .solve(target)
+                .map_err(|e| ProposeError::Derive(DeriveError::Solve(e)))?;
+            let violations = validate(target, MIN_JAMB_DISTANCE)
+                .map_err(|e| ProposeError::Derive(DeriveError::Geometry(e)))?;
+            (action.clone(), target.clone(), solution, violations)
+        }
+    };
+    let diff = diff_documents(base, &after)?;
+    let flags = flags(base, &after, &diff);
+    Ok(Proposal {
+        proposal_id: proposal_id(history.version(), &resolved).map_err(ProposeError::Json)?,
+        base_version: history.version(),
+        resolved,
+        diff,
+        constraint_status: solution.constraints,
+        conflicts: solution.conflicts,
+        violations,
+        ambiguities: Vec::new(),
+        flags,
+    })
+}
+
+/// Commits `proposal`, appending one event to `history` (8.4).
+pub fn commit(
+    history: &mut History,
+    proposal: &Proposal,
+    timestamp_ms: i64,
+    actor: &str,
+) -> Result<LogEntry, CommitError> {
+    if proposal.base_version != history.version() {
+        return Err(CommitError::Stale {
+            base_version: proposal.base_version,
+            head_version: history.version(),
+        });
+    }
+    // Proposing again checks the proposal against its id and recomputes
+    // what blocks it, so nothing in the caller's copy is trusted.
+    let fresh = propose(history, &proposal.resolved).map_err(CommitError::Propose)?;
+    if fresh != *proposal {
+        return Err(CommitError::Altered);
+    }
+    if fresh.blocked() {
+        return Err(CommitError::Blocked);
+    }
+    let event = match &fresh.resolved {
+        ProposedAction::Commands { commands } => Event::Commit {
+            commands: commands.clone(),
+        },
+        ProposedAction::Undo => Event::Undo,
+        ProposedAction::Redo => Event::Redo,
+    };
+    let entry = LogEntry {
+        sequence: history.version().saturating_add(1),
+        timestamp_ms,
+        actor: actor.to_string(),
+        event,
+    };
+    history.apply_entry(&entry).map_err(CommitError::Log)?;
+    Ok(entry)
+}
+
+fn json(doc: &Document) -> Result<Value, ProposeError> {
+    serde_json::to_value(doc).map_err(|e| ProposeError::Json(CanonicalError::Json(e.to_string())))
+}
+
+/// One entry per changed entity, ordered by collection then id (Q-36).
+fn diff_documents(base: &Document, after: &Document) -> Result<Vec<DiffEntry>, ProposeError> {
+    let (a, b) = (json(base)?, json(after)?);
+    let root = serde_json::to_value(schemars::schema_for!(Document))
+        .map_err(|e| ProposeError::Json(CanonicalError::Json(e.to_string())))?;
+    let empty = serde_json::Map::new();
+    let (am, bm) = (
+        a.as_object().unwrap_or(&empty),
+        b.as_object().unwrap_or(&empty),
+    );
+    let keys: BTreeSet<&String> = am.keys().chain(bm.keys()).collect();
+    let mut out = Vec::new();
+    for key in keys {
+        let field_schema = root
+            .get("properties")
+            .and_then(|p| p.get(key))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let mut push = |id: Option<Uuid>, x: Option<&Value>, y: Option<&Value>, schema: &Value| {
+            if x == y {
+                return;
+            }
+            let change = match (x, y) {
+                (None, Some(_)) => Change::Added,
+                (Some(_), None) => Change::Removed,
+                _ => Change::Changed,
+            };
+            let mut paths = Vec::new();
+            if let (Some(x), Some(y)) = (x, y) {
+                changed_paths(x, y, "", &mut paths);
+            }
+            out.push(DiffEntry {
+                collection: key.clone(),
+                id,
+                change,
+                before: x.cloned(),
+                after: y.cloned(),
+                before_display: x.map(|v| display(v, schema, &root)),
+                after_display: y.map(|v| display(v, schema, &root)),
+                changed_paths: paths,
+            });
+        };
+        if COLLECTIONS.contains(&key.as_str()) {
+            let entity_schema = field_schema
+                .get("additionalProperties")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let (xa, ya) = (
+                am.get(key).and_then(Value::as_object).unwrap_or(&empty),
+                bm.get(key).and_then(Value::as_object).unwrap_or(&empty),
+            );
+            let ids: BTreeSet<&String> = xa.keys().chain(ya.keys()).collect();
+            for id in ids {
+                let uuid: Option<Uuid> = serde_json::from_value(Value::String(id.clone())).ok();
+                push(uuid, xa.get(id), ya.get(id), &entity_schema);
+            }
+        } else {
+            push(None, am.get(key), bm.get(key), &field_schema);
+        }
+    }
+    Ok(out)
+}
+
+/// JSON pointers of every `{source: "proposed", value}` object in `v`.
+fn proposed_paths(v: &Value, at: &str, out: &mut Vec<String>) {
+    match v {
+        Value::Object(map) => {
+            if map.get("source").and_then(Value::as_str) == Some("proposed")
+                && map.contains_key("value")
+            {
+                out.push(at.to_string());
+            }
+            for (k, x) in map {
+                proposed_paths(x, &format!("{at}/{k}"), out);
+            }
+        }
+        Value::Array(items) => {
+            for (i, x) in items.iter().enumerate() {
+                proposed_paths(x, &format!("{at}/{i}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn flags(base: &Document, after: &Document, diff: &[DiffEntry]) -> Vec<Flag> {
+    let existing = |wall: &Uuid| {
+        [base, after].iter().any(|d| {
+            d.walls
+                .get(wall)
+                .is_some_and(|w| w.function == Function::Existing)
+        })
+    };
+    let mut out = BTreeSet::new();
+    for d in diff {
+        if let (Some(after_value), true) = (&d.after, d.change != Change::Removed) {
+            let mut paths = Vec::new();
+            proposed_paths(after_value, "", &mut paths);
+            for p in paths {
+                let touched = d.change == Change::Added
+                    || d.changed_paths
+                        .iter()
+                        .any(|c| c == &p || c.starts_with(&format!("{p}/")));
+                if touched {
+                    out.insert(Flag::ProposedValue {
+                        collection: d.collection.clone(),
+                        id: d.id,
+                        path: p,
+                    });
+                }
+            }
+        }
+        let Some(id) = d.id else { continue };
+        let on_existing = match d.collection.as_str() {
+            "walls" => existing(&id),
+            "openings" => [base, after]
+                .iter()
+                .any(|doc| doc.openings.get(&id).is_some_and(|o| existing(&o.host))),
+            "occurrences" => [base, after].iter().any(|doc| {
+                doc.occurrences
+                    .get(&id)
+                    .is_some_and(|o| match &o.placement {
+                        Placement::WallMounted { wall, .. } => existing(wall),
+                        _ => false,
+                    })
+            }),
+            _ => false,
+        };
+        let is_wall_edit = d.collection != "walls" || d.change != Change::Added;
+        if on_existing && is_wall_edit {
+            out.insert(Flag::ExistingConditionEdit {
+                collection: d.collection.clone(),
+                id,
+            });
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The document's entity maps, keyed by id; every other field is a singleton.
+const COLLECTIONS: &[&str] = &[
+    "assets",
+    "camera_bookmarks",
+    "ceilings",
+    "constraints",
+    "datums",
+    "element_types",
+    "features",
+    "layer_sets",
+    "materials",
+    "nodes",
+    "occurrences",
+    "openings",
+    "roofs",
+    "slabs",
+    "spaces",
+    "storeys",
+    "underlays",
+    "variant_slots",
+    "walls",
+];
+
+/// JSON pointers of every value that differs between `a` and `b`.
+fn changed_paths(a: &Value, b: &Value, at: &str, out: &mut Vec<String>) {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+            for k in keys {
+                let path = format!("{at}/{}", k.replace('~', "~0").replace('/', "~1"));
+                match (x.get(k), y.get(k)) {
+                    (Some(p), Some(q)) => changed_paths(p, q, &path, out),
+                    _ => out.push(path),
+                }
+            }
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (p, q)) in x.iter().zip(y).enumerate() {
+                changed_paths(p, q, &format!("{at}/{i}"), out);
+            }
+        }
+        _ if a != b => out.push(at.to_string()),
+        _ => {}
+    }
+}
+
+/// `value` with every Length (found through `schema`) shown in feet and inches.
+fn display(value: &Value, schema: &Value, root: &Value) -> Value {
+    if let Some(name) = schema
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|r| r.strip_prefix("#/$defs/"))
+    {
+        if name == "Length"
+            && let Some(n) = value.as_i64()
+        {
+            return Value::String(format_length(Length::from_nanometers(n)));
+        }
+        if let Some(def) = root.get("$defs").and_then(|d| d.get(name)) {
+            return display(value, def, root);
+        }
+        return value.clone();
+    }
+    for key in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(key).and_then(Value::as_array) {
+            let pick = branches.iter().find(|b| matches_branch(value, b, root));
+            return pick.map_or_else(|| value.clone(), |b| display(value, b, root));
+        }
+    }
+    match value {
+        Value::Object(map) => {
+            let props = schema.get("properties");
+            let extra = schema.get("additionalProperties").filter(|v| v.is_object());
+            Value::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        let sub = props.and_then(|p| p.get(k)).or(extra);
+                        (
+                            k.clone(),
+                            sub.map_or_else(|| v.clone(), |s| display(v, s, root)),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        Value::Array(items) => {
+            let sub = schema.get("items");
+            Value::Array(
+                items
+                    .iter()
+                    .map(|v| sub.map_or_else(|| v.clone(), |s| display(v, s, root)))
+                    .collect(),
+            )
+        }
+        other => other.clone(),
+    }
+}
+
+/// Whether `value` belongs to the schema branch `b` of an anyOf or oneOf.
+fn matches_branch(value: &Value, b: &Value, root: &Value) -> bool {
+    let b = match b
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|r| r.strip_prefix("#/$defs/"))
+        .and_then(|name| root.get("$defs").and_then(|d| d.get(name)))
+    {
+        Some(def) if def.get("properties").is_some() || def.get("type").is_some() => def,
+        _ => b,
+    };
+    match value {
+        Value::Null => b.get("type").and_then(Value::as_str) == Some("null"),
+        Value::Object(map) => {
+            let props = b.get("properties");
+            if let (Some(kind), Some(expected)) = (
+                map.get("kind"),
+                props
+                    .and_then(|p| p.get("kind"))
+                    .and_then(|k| k.get("const")),
+            ) {
+                return kind == expected;
+            }
+            if map.len() == 1
+                && let (Some(k), Some(req)) = (
+                    map.keys().next(),
+                    b.get("required").and_then(Value::as_array),
+                )
+            {
+                return req.len() == 1 && req[0].as_str() == Some(k.as_str());
+            }
+            b.get("type").and_then(Value::as_str) != Some("null")
+        }
+        _ => b.get("type").and_then(Value::as_str) != Some("null"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::tests::{cmd, create_node, genesis, set_storey, with_wall};
+    use crate::command::{SetProjectUnits, SetVariantSelection};
+    use crate::document::*;
+    use crate::units::ProjectUnit;
+
+    fn bytes(doc: &Document) -> String {
+        to_canonical_json(doc).unwrap_or_else(|e| e.to_string())
+    }
+
+    fn commands(c: Vec<Command>) -> ProposedAction {
+        ProposedAction::Commands { commands: c }
+    }
+
+    fn uid(n: u8) -> Uuid {
+        Uuid::from_bytes([n; 16])
+    }
+
+    fn door(n: u8, host: Uuid, from: Uuid, feet: i64) -> Command {
+        cmd(
+            n,
+            Action::CreateOpening(CreateOpening {
+                kind: OpeningKind::Door,
+                host,
+                reference: Reference::Node { node: from },
+                anchor: OpeningEdge::Start,
+                offset: Sourced {
+                    value: Length::from_nanometers(feet * 304_800_000),
+                    source: Source::UserStated,
+                },
+                width: None,
+                height: None,
+                sill: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn propose_persists_nothing() -> Result<(), ProposeError> {
+        let history = History::new(genesis());
+        let before = history.clone();
+        let action = commands(vec![
+            cmd(1, set_storey(None, "Ground")),
+            cmd(2, create_node(0, 0)),
+        ]);
+        let a = propose(&history, &action)?;
+        assert_eq!(history, before);
+        assert_eq!(bytes(history.document()), bytes(&genesis()));
+        assert_eq!(history.version(), 0);
+        // Deterministic: the same action proposes the same proposal.
+        assert_eq!(propose(&history, &action)?, a);
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_base_version_is_rejected() -> Result<(), CommitError> {
+        let mut history = History::new(genesis());
+        let first = propose(&history, &commands(vec![cmd(1, create_node(0, 0))]))
+            .map_err(CommitError::Propose)?;
+        let second = propose(&history, &commands(vec![cmd(2, create_node(5, 5))]))
+            .map_err(CommitError::Propose)?;
+        commit(&mut history, &first, 1_000, "user")?;
+        assert_eq!(
+            commit(&mut history, &second, 2_000, "user"),
+            Err(CommitError::Stale {
+                base_version: 0,
+                head_version: 1
+            })
+        );
+        assert_eq!(history.version(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn an_altered_proposal_is_rejected() -> Result<(), CommitError> {
+        let mut history = History::new(genesis());
+        let mut p = propose(&history, &commands(vec![cmd(1, create_node(0, 0))]))
+            .map_err(CommitError::Propose)?;
+        p.resolved = commands(vec![cmd(1, create_node(9, 9))]);
+        assert_eq!(
+            commit(&mut history, &p, 1_000, "user"),
+            Err(CommitError::Altered)
+        );
+        assert_eq!(history.version(), 0);
+        Ok(())
+    }
+
+    fn entries(p: &Proposal) -> Vec<(String, Option<Uuid>, Change)> {
+        p.diff
+            .iter()
+            .map(|d| (d.collection.clone(), d.id, d.change))
+            .collect()
+    }
+
+    #[test]
+    fn the_diff_lists_every_changed_entity() -> Result<(), ProposeError> {
+        let history = History::new(genesis());
+        let storey = cmd(1, set_storey(None, "Ground"));
+        let node = cmd(2, create_node(7, -3));
+        let units = cmd(
+            3,
+            Action::SetProjectUnits(SetProjectUnits {
+                default_unit: ProjectUnit::Feet,
+            }),
+        );
+        let select = cmd(
+            4,
+            Action::SetVariantSelection(SetVariantSelection {
+                slot: uid(10),
+                selected: uid(12),
+            }),
+        );
+        let new = |c: &Command| Some(Uuid::derive(c.idempotency_key, "command", "0"));
+        let p = propose(
+            &history,
+            &commands(vec![storey.clone(), node.clone(), units, select]),
+        )?;
+        let mut expected = vec![
+            ("nodes".to_string(), new(&node), Change::Added),
+            ("project".to_string(), None, Change::Changed),
+            ("storeys".to_string(), new(&storey), Change::Added),
+            ("variant_slots".to_string(), Some(uid(10)), Change::Changed),
+        ];
+        expected.sort_by_key(|e| (e.0.clone(), e.1));
+        assert_eq!(entries(&p), expected);
+        let project = p.diff.iter().find(|d| d.collection == "project");
+        assert_eq!(
+            project.map(|d| d.changed_paths.clone()),
+            Some(vec!["/default_unit".to_string()])
+        );
+        let slot = p.diff.iter().find(|d| d.collection == "variant_slots");
+        assert_eq!(
+            slot.map(|d| d.changed_paths.clone()),
+            Some(vec!["/selected".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_diff_shows_display_units_and_flags_proposed_values() -> Result<(), ProposeError> {
+        let (doc, wall, a) = with_wall();
+        let history = History::new(doc);
+        let c = door(1, wall, a, 4);
+        let p = propose(&history, &commands(vec![c.clone()]))?;
+        let id = Some(Uuid::derive(c.idempotency_key, "command", "0"));
+        let added = p
+            .diff
+            .iter()
+            .find(|d| d.collection == "openings" && d.id == id);
+        assert_eq!(added.map(|d| d.change), Some(Change::Added));
+        let shown = added
+            .and_then(|d| d.after_display.clone())
+            .unwrap_or_default();
+        assert_eq!(shown["width"]["value"], Value::String("3'-0\"".into()));
+        assert_eq!(shown["start"], Value::String("4'-0\"".into()));
+        let raw = added.and_then(|d| d.after.clone()).unwrap_or_default();
+        assert_eq!(raw["width"]["value"], Value::from(914_400_000_i64));
+        // The defaults it filled in are Proposed, and the resolved command says so.
+        for field in ["/height", "/sill", "/width"] {
+            assert!(
+                p.flags.contains(&Flag::ProposedValue {
+                    collection: "openings".into(),
+                    id,
+                    path: field.into()
+                }),
+                "{field}: {:?}",
+                p.flags
+            );
+        }
+        let ProposedAction::Commands { commands } = &p.resolved else {
+            return Err(ProposeError::NothingToUndo);
+        };
+        assert!(
+            matches!(&commands[0].action, Action::CreateOpening(o) if o.width.is_some() && o.sill.is_some())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn edits_to_existing_conditions_are_flagged() -> Result<(), ProposeError> {
+        let (mut doc, wall, a) = with_wall();
+        if let Some(w) = doc.walls.get_mut(&wall) {
+            w.function = Function::Existing;
+        }
+        let history = History::new(doc);
+        let c = door(1, wall, a, 4);
+        let p = propose(&history, &commands(vec![c.clone()]))?;
+        let id = Uuid::derive(c.idempotency_key, "command", "0");
+        assert!(p.flags.contains(&Flag::ExistingConditionEdit {
+            collection: "openings".into(),
+            id
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn violations_and_conflicts_block_commit() -> Result<(), CommitError> {
+        // A door 19 ft from the start of a 20 ft wall sticks out past its end.
+        let (doc, wall, a) = with_wall();
+        let mut history = History::new(doc);
+        let p = propose(&history, &commands(vec![door(1, wall, a, 19)]))
+            .map_err(CommitError::Propose)?;
+        assert!(p.blocked());
+        assert_eq!(
+            commit(&mut history, &p, 1_000, "user"),
+            Err(CommitError::Blocked)
+        );
+        // With the violation acknowledged in the document, the same commit goes through.
+        let (mut doc, wall, a) = with_wall();
+        let c = door(1, wall, a, 19);
+        let id = Uuid::derive(c.idempotency_key, "command", "0");
+        doc.acknowledged.insert(ViolationKey {
+            kind: ViolationKind::OpeningOutsideHost,
+            entities: vec![id],
+        });
+        let mut history = History::new(doc);
+        let p = propose(&history, &commands(vec![c])).map_err(CommitError::Propose)?;
+        assert!(!p.blocked());
+        commit(&mut history, &p, 1_000, "user")?;
+        // A document with clashing constraints: every proposal is blocked.
+        let (mut doc, _, a) = with_wall();
+        doc.constraints.insert(
+            uid(77),
+            Constraint {
+                kind: ConstraintKind::Fixed {
+                    reference: Reference::Node { node: a },
+                    axis: Axis::X,
+                    value: Length::from_nanometers(5),
+                },
+                status: ConstraintStatus::Driving,
+                source: Source::UserStated,
+                provenance: None,
+            },
+        );
+        let mut history = History::new(doc);
+        let p = propose(&history, &commands(vec![cmd(1, create_node(0, 0))]))
+            .map_err(CommitError::Propose)?;
+        assert_eq!(p.conflicts.len(), 1);
+        assert_eq!(
+            commit(&mut history, &p, 1_000, "user"),
+            Err(CommitError::Blocked)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn undo_and_redo_go_through_proposals() -> Result<(), CommitError> {
+        let (doc, wall, a) = with_wall();
+        let mut history = History::new(doc.clone());
+        let p = propose(&history, &commands(vec![door(1, wall, a, 4)]))
+            .map_err(CommitError::Propose)?;
+        commit(&mut history, &p, 1_000, "user")?;
+        let after = bytes(history.document());
+        let undo = propose(&history, &ProposedAction::Undo).map_err(CommitError::Propose)?;
+        assert_eq!(
+            undo.diff.iter().map(|d| d.change).collect::<Vec<_>>(),
+            vec![Change::Removed]
+        );
+        commit(&mut history, &undo, 2_000, "user")?;
+        assert_eq!(history.document().openings.len(), 0);
+        let redo = propose(&history, &ProposedAction::Redo).map_err(CommitError::Propose)?;
+        commit(&mut history, &redo, 3_000, "user")?;
+        assert_eq!(bytes(history.document()), after);
+        assert_eq!(
+            propose(&history, &ProposedAction::Redo),
+            Err(ProposeError::NothingToRedo)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_committed_log_replays_byte_identically() -> Result<(), CommitError> {
+        let (doc, wall, a) = with_wall();
+        let mut history = History::new(doc.clone());
+        let mut log = Vec::new();
+        let p = propose(
+            &history,
+            &commands(vec![door(1, wall, a, 4), cmd(2, create_node(1, 1))]),
+        )
+        .map_err(CommitError::Propose)?;
+        log.push(commit(&mut history, &p, 1_000, "user")?);
+        let p = propose(&history, &ProposedAction::Undo).map_err(CommitError::Propose)?;
+        log.push(commit(&mut history, &p, 2_000, "agent:1")?);
+        let p = propose(&history, &ProposedAction::Redo).map_err(CommitError::Propose)?;
+        log.push(commit(&mut history, &p, 3_000, "user")?);
+        let mut replayed = History::new(doc);
+        replayed.replay(&log).map_err(CommitError::Log)?;
+        assert_eq!(bytes(replayed.document()), bytes(history.document()));
+        // The log holds the resolved commands: the defaults are explicit.
+        let Event::Commit { commands } = &log[0].event else {
+            return Err(CommitError::Altered);
+        };
+        assert!(matches!(&commands[0].action, Action::CreateOpening(o) if o.width.is_some()));
+        Ok(())
+    }
+}

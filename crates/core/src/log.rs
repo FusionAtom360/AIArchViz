@@ -1,5 +1,9 @@
 //! The command log, history, undo, redo and snapshots (spec 5.5, 8.4; Q-10, Q-11).
 //!
+//! A Commit applies its commands and then derives the document (solve,
+//! positions, joins, space boundaries, acknowledgments; Q-35), so replay
+//! reproduces committed documents exactly.
+//!
 //! The log is append-only. Each entry is an envelope holding the session
 //! metadata that must stay out of the document (sequence, caller-supplied
 //! time, actor) and one event: an atomic Commit of commands, an Undo or a
@@ -20,6 +24,7 @@ use crate::canonical::{CanonicalError, to_canonical_json};
 use crate::command::{Command, CommandError, apply};
 use crate::document::Document;
 use crate::identity::Uuid;
+use crate::proposal::{DeriveError, derive};
 
 /// What happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +78,8 @@ pub enum LogError {
         index: usize,
         error: CommandError,
     },
+    /// The document could not be derived after the commands (Q-35).
+    Derive(DeriveError),
     NothingToUndo,
     NothingToRedo,
     /// Undo reached the snapshot this history started from.
@@ -95,6 +102,7 @@ impl fmt::Display for LogError {
                 "idempotency key {key} was already used at sequence {first_sequence}"
             ),
             LogError::Command { index, error } => write!(f, "command {index} failed: {error}"),
+            LogError::Derive(e) => write!(f, "{e}"),
             LogError::NothingToUndo => f.write_str("nothing to undo"),
             LogError::NothingToRedo => f.write_str("nothing to redo"),
             LogError::UndoBeyondSnapshot { snapshot_version } => write!(
@@ -148,6 +156,16 @@ impl History {
         self.version
     }
 
+    /// The document an Undo would restore, if any.
+    pub fn peek_undo(&self) -> Option<&Document> {
+        self.undo.last()
+    }
+
+    /// The document a Redo would restore, if any.
+    pub fn peek_redo(&self) -> Option<&Document> {
+        self.redo.last()
+    }
+
     /// The current state as a snapshot.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
@@ -185,6 +203,8 @@ impl History {
                 for (index, c) in commands.iter().enumerate() {
                     next = apply(&next, c).map_err(|error| LogError::Command { index, error })?;
                 }
+                // Derive positions, joins, boundaries and acknowledgments (Q-35).
+                let next = derive(next).map_err(LogError::Derive)?.document;
                 let prior = std::mem::replace(&mut self.document, next);
                 self.undo.push(prior);
                 self.redo.clear();

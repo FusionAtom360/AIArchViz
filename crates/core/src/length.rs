@@ -16,20 +16,26 @@ const NM_PER_MILLIMETER: i64 = 1_000_000;
 
 /// A length in nanometers. Serialized as a bare JSON integer.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 #[serde(transparent)]
 pub struct Length(i64);
+
+/// Length is a named schema definition, so tools can tell lengths from
+/// other integers (Q-36).
+impl schemars::JsonSchema for Length {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Length".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "integer",
+            "format": "int64",
+            "description": "A length in nanometers."
+        })
+    }
+}
 
 /// Why a length operation has no result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
