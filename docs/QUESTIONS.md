@@ -172,3 +172,20 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) implement CreateOpening with args {kind, host, reference, anchor, offset, width, height, sill}, where width, height and sill may be null and then take the catalog default with source Proposed; the new id is the command's derived id; it fails if the host is unknown; (b) leave commands to a later task and expose defaults only as a function.
 - Recommendation: (a). It is the one place defaults are applied, and it lets tests create openings the way the app will.
 - Answer: (a) implement CreateOpening (owner, 2026-11-26).
+
+## Q-24: What identifies a Space's room (T-109, status: answered)
+- Context: 6 lists Space as "derived boundary, name, finishes", and T-109 derives the boundary "from the bounding wall faces". Nothing in the Space says which region of the plan it is, so there is no input to derive from.
+- Options: (a) add `seed: Point` to Space, a point inside the room (as a room placement point in CAD); the boundary is the region containing the seed that the storey's wall footprints enclose; a seed inside a wall, or a region that is not closed, is an error; (b) add an ordered list of bounding walls and the side facing the room; (c) the user draws the boundary and it is only checked against the walls.
+- Recommendation: (a). One point is the least the user or agent must supply, it survives walls moving, and the boundary follows from the walls deterministically.
+- Answer: (a) seed point (owner, 2026-11-26).
+
+## Q-25: A wall standing free inside a room (T-109, status: answered)
+- Context: a wall that touches no other wall, inside a room, makes the room's region have a hole. Space stores one boundary polygon.
+- Options: (a) v1 reports this as an error (IslandInSpace naming the walls), so every Space is one simple polygon; (b) add `holes` to Space; the area is the outer polygon minus the holes; slabs and ceilings from such a Space get the holes too.
+- Recommendation: (a) for v1. The first use case has no free-standing walls, and it keeps Space, Slab and Ceiling single polygons; holes can be added later without changing anything else.
+- Answer: (a) error in v1 (owner, 2026-11-26).
+
+## Q-26: Representation choices for T-109 unless you object (T-109, status: answered)
+- Choices: areas are exact i128 square nanometers (an i64 holds at most about 9.2e18 nm², which is only about 9.2 m² or 99 sq ft); boundaries are listed counterclockwise from the vertex with the lowest x, then lowest y, with collinear vertices removed; an explicit polygon must have at least 4 vertices, axis-aligned edges, positive area and no self-intersection or touching edges; a slab or ceiling from a space uses the space boundary unchanged (the room side of the wall faces); only walls on the space's storey bound it; the derived boundary is written to Space.boundary by an update function (Q-7).
+- Recommendation: accept as listed.
+- Answer: accepted as listed (owner, 2026-11-26).

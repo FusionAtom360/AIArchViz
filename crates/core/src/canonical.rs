@@ -363,6 +363,10 @@ mod tests {
             Space {
                 storey,
                 name: "Shop floor".into(),
+                seed: Point {
+                    x: len(10 * FT),
+                    y: len(6 * FT),
+                },
                 boundary: rect.clone(),
                 finishes: Finishes {
                     floor: None,

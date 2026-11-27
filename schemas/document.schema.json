@@ -1602,6 +1602,10 @@
         "name": {
           "type": "string"
         },
+        "seed": {
+          "$ref": "#/$defs/Point",
+          "description": "A point inside the room; the boundary is the region around it that\nthe storey's walls enclose (Q-24)."
+        },
         "storey": {
           "$ref": "#/$defs/Uuid"
         }
@@ -1609,6 +1613,7 @@
       "required": [
         "storey",
         "name",
+        "seed",
         "boundary",
         "finishes"
       ],

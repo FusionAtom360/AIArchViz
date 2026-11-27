@@ -9,6 +9,7 @@ mod identity;
 mod length;
 mod log;
 mod solver;
+mod space;
 mod units;
 
 pub use canonical::{CanonicalError, document_schema_json, from_canonical_json, to_canonical_json};
@@ -27,6 +28,10 @@ pub use length::{Length, LengthError};
 pub use log::{Event, History, LogEntry, LogError, Snapshot, log_from_jsonl, log_to_jsonl};
 pub use solver::{
     Conflict, ConstraintReport, FreeClass, LayerA, Member, Outcome, Solution, SolveError, Solver,
+};
+pub use space::{
+    PolygonError, SpaceError, boundary_outline, check_polygon, polygon_area, space_boundary,
+    update_spaces,
 };
 pub use units::{
     GRID_NM, InputContext, InputRounding, ParseError, ParsedLength, ProjectUnit, echo_length,

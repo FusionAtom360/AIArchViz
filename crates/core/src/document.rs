@@ -492,6 +492,9 @@ pub struct Finishes {
 pub struct Space {
     pub storey: Uuid,
     pub name: String,
+    /// A point inside the room; the boundary is the region around it that
+    /// the storey's walls enclose (Q-24).
+    pub seed: Point,
     pub boundary: Vec<Point>,
     pub finishes: Finishes,
 }
