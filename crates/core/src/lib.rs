@@ -1,6 +1,7 @@
 //! C1 core: document model, solver, commands, validation and pure export logic.
 
 mod canonical;
+mod clearance;
 mod command;
 mod defaults;
 mod document;
@@ -19,6 +20,7 @@ mod units;
 mod validity;
 
 pub use canonical::{CanonicalError, document_schema_json, from_canonical_json, to_canonical_json};
+pub use clearance::{ClearanceError, ClearanceRequest, clearance_resolve, wall_normal_axis};
 pub use command::{
     Action, Command, CommandError, CreateNode, CreateOpening, DimensionTarget, Motion,
     MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
