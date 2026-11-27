@@ -494,3 +494,22 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) add T-122b "Slice geometry fixes" to docs/PLAN.md before G-4, covering the answers to Q-67 to Q-70 and regenerating fixtures and goldens. T-122 stays open until G-4 passes on its output. (b) a separate task per question.
 - Recommendation: (a). The four fixes share the goldens and are checked together at G-4.
 - Answer: (a) T-122b added to docs/PLAN.md before G-4 (owner, 2026-11-27).
+
+## Q-72: How to close REVIEW-1 C-2, the Phase 1 exit criteria (status: open)
+- Context: the Phase 1 exit (PLAN section 6) needs T-101 to T-122 done, gates G-2, G-3 and G-4 passed, and S-1, S-3 and S-7 recorded in docs/DECISIONS.md. Spec 14 makes the Phase 1 exit "S-1, S-3 and S-7 pass for DXF and glTF". Where things stand:
+  - G-2 and G-3 have passed, and S-7 is recorded (DEC-1).
+  - S-1 is recorded as DEC-4, which is still a draft. Its first evidence line says 102 Proposed values. The T-122b re-run line below it gives the current 92.
+  - G-4 has not run. It is a hand check in the UE 5.8 editor (docs/SLICE.md), so only the owner can do it. T-122 stays open until G-4 passes (Q-71).
+  - S-3 is not recorded. glTF has a test (`l_room_fiducials_land_at_the_expected_gltf_coordinates`), and the Scene Package lists the fiducials. UE is checked at G-4. The DXF writes no datums or fiducials (REVIEW-1 H-2), so S-3 cannot pass for DXF as built.
+  - None of this is a code task except H-2.
+- Options:
+  - (a) Close C-2 in this order:
+    1. Add a task T-191 "L-room fiducials in the DXF" (H-2). The DXF writes each Point datum on a DATUMS layer as a POINT plus its name as TEXT. A test reads the L-room DXF back and finds F-A to F-D at (0, 0), (240, 0), (240, 96) and (0, 180) in inches, to the nanometer. Goldens are regenerated.
+    2. The owner runs G-4 on the regenerated `cargo xtask slice` output.
+    3. Claude Code drafts DEC-7, "S-3 result". It covers the DXF (T-191 test), the glTF (existing test) and UE (G-4 readings), plus the G-4 outcomes SLICE.md asks for: the measured dimension, the Q-70 shading and screenshots.
+    4. The owner approves DEC-4 and DEC-7.
+    5. C-2 is marked closed and `phase-1` is tagged.
+  - (b) Run G-4 now. Record S-3 for glTF and UE only, and defer S-3 for DXF to a later phase. This changes spec 14's Phase 1 exit, so it needs a DEC approved by the owner. AutoCAD registration was already checked against a drawing at G-3 (S-7), but on the shop, not on the L-room fiducials.
+  - (c) As (a), but also check the DXF fiducials by hand in AutoCAD 2018 (ID command on each point) at a repeat of G-3. This adds an owner step and checks nothing the T-191 read-back test does not.
+- Recommendation: (a). It meets the exit criteria as written, needs no change to the spec, and keeps the DXF check automated. G-4 can run before or after T-191, because T-191 does not change the GLB. Running it after means only one regenerated slice to check.
+- Answer:
