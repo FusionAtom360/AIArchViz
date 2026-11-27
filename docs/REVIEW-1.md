@@ -63,7 +63,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **G-3:** the owner's overlay check was on the shop, not the L-room fiducials.
 
 ### H-3: A torn log line makes the project unopenable
-- **Status: open**, planned as T-193 (Q-73 (a)).
+- **Status: closed** by T-193 (2026-11-27), per Q-73 (a). `open` replays the log only up to its last newline and ignores a torn final segment, and the next commit truncates it; covered by `a_torn_last_line_is_dropped_and_replaced_by_the_next_commit` and `a_bad_complete_line_is_still_a_corrupt_project`.
 - **Where:**
   - `crates/cli/src/store.rs:102`: `append` writes the line in place, with no temp file and rename and no length or checksum framing.
   - `crates/cli/src/store.rs:80`: `open` fails on any bad line.
@@ -173,7 +173,7 @@ Every Done-when line of T-101 to T-122b has a test, except those listed here. Li
 | 5.3 | User-stated inputs MUST lie on the grid | Enforced only in the parser, not in commands (C-1, closed by T-190) |
 | 5.5 | Migrations | None (M-7) |
 | 6.7 | ExistingConditionEdit shows baseline original | Not implemented (M-6) |
-| 8.4 | Commit is atomic | In memory only; not on disk (H-3) |
+| 8.4 | Commit is atomic | In memory only; not on disk (H-3, closed by T-193) |
 | 9.4 (cited by T-112) | Canonical plain-language echo before commit | Not implemented (M-10) |
 | 13.2 | Inverse delta restores a byte-identical document | No test (M-1) |
 

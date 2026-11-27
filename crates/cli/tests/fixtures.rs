@@ -315,3 +315,97 @@ fn an_off_grid_user_stated_constraint_is_rejected() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A copy of `from` (genesis.json only) in a fresh folder, with `log` as its
+/// log.jsonl.
+fn with_log(from: &Path, tag: &str, log: &[u8]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("archviz-torn-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::copy(from.join("genesis.json"), dir.join("genesis.json"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(dir.join("log.jsonl"), log).unwrap_or_else(|e| panic!("{e}"));
+    dir
+}
+
+fn log_of(dir: &Path) -> Vec<u8> {
+    std::fs::read(dir.join("log.jsonl")).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// T-193 (spec 8.4, Q-73, REVIEW-1 H-3): a crash during an append leaves a
+/// final segment with no newline. It was never committed, so the project
+/// opens with every complete entry, read-only subcommands leave the file
+/// alone, and the next commit replaces the torn tail.
+#[test]
+fn a_torn_last_line_is_dropped_and_replaced_by_the_next_commit() {
+    let full = replay("l-room", "torn");
+    let log = log_of(&full);
+    let text = script("l-room");
+    let last = text.lines().last().unwrap_or_default();
+    let (sub, request) = last.split_once(' ').unwrap_or((last, ""));
+    assert_eq!(sub, "apply");
+    // Every complete entry but the last one.
+    let body = log.strip_suffix(b"\n").unwrap_or(&log);
+    let cut = body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let complete = &log[..cut];
+    assert!(complete.ends_with(b"\n") && complete.len() < log.len());
+    let reference = with_log(&full, "reference", complete);
+    let expected = query(&reference);
+
+    let tails: [(&str, Vec<u8>); 3] = [
+        ("partial", br#"{"kind":"commit","seq":"#.to_vec()),
+        ("half-entry", log[cut..cut + (log.len() - cut) / 2].to_vec()),
+        // A cut inside a two-byte UTF-8 character.
+        ("utf8", b"{\"actor\":\"\xC3".to_vec()),
+    ];
+    for (tag, tail) in tails {
+        let torn = [complete, tail.as_slice()].concat();
+        let dir = with_log(&full, tag, &torn);
+        assert_eq!(query(&dir), expected, "{tag}");
+        solve(&dir);
+        no_violations(&dir);
+        assert_eq!(
+            log_of(&dir),
+            torn,
+            "{tag}: read-only subcommands wrote the log"
+        );
+
+        let (out, status) = archviz(sub, &dir, request);
+        assert_eq!(status, 0, "{tag}: {out}");
+        assert_eq!(log_of(&dir), log, "{tag}: the torn tail was not replaced");
+        assert_eq!(query(&dir), query(&full), "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    let _ = std::fs::remove_dir_all(&reference);
+    let _ = std::fs::remove_dir_all(&full);
+}
+
+/// T-193: a bad line that ends in a newline was flushed as committed, so it
+/// is corruption, not a torn append.
+#[test]
+fn a_bad_complete_line_is_still_a_corrupt_project() {
+    let full = replay("l-room", "corrupt");
+    let log = log_of(&full);
+    for (tag, bad) in [
+        (
+            "last",
+            [log.as_slice(), b"{\"kind\":\"commit\",\"seq\":\n"].concat(),
+        ),
+        (
+            "middle",
+            [b"not json\n".as_slice(), log.as_slice()].concat(),
+        ),
+    ] {
+        let dir = with_log(&full, tag, &bad);
+        let (out, status) = archviz("query", &dir, "");
+        assert_eq!(status, 6, "{tag}: {out}");
+        assert_eq!(
+            out["error"]["code"],
+            json!("CORRUPT_PROJECT"),
+            "{tag}: {out}"
+        );
+        assert_eq!(log_of(&dir), bad, "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    let _ = std::fs::remove_dir_all(&full);
+}
