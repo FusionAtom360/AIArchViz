@@ -23,3 +23,7 @@ warnings = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# T-199b: release builds panic on overflow instead of wrapping (REVIEW-1 M-5).
+[profile.release]
+overflow-checks = true

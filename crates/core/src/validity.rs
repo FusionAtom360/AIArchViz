@@ -30,7 +30,7 @@ use crate::document::{
     ViolationKind, Wall, WallTop,
 };
 use crate::geometry::{
-    GeometryError, OpeningProblem, opening_violations, wall_geometry, wall_profiles,
+    GeometryError, OpeningProblem, opening_violations, ring, wall_geometry, wall_profiles,
 };
 use crate::identity::Uuid;
 use crate::items::{Rect, clearance_zone, footprint, height_range};
@@ -150,7 +150,7 @@ pub fn validate(document: &Document, min_jamb: Length) -> Result<Vec<Violation>,
         .filter_map(|(id, w)| geometry.get(id).map(|g| (id, w, &g.footprint)))
         .collect();
     for (i, (ia, wa, pa)) in walls.iter().enumerate() {
-        for (ib, wb, pb) in &walls[i + 1..] {
+        for (ib, wb, pb) in walls.iter().skip(i + 1) {
             let joined = [wa.node_a, wa.node_b]
                 .iter()
                 .any(|n| *n == wb.node_a || *n == wb.node_b);
@@ -429,10 +429,8 @@ fn inside(a: &[Point], b: &[Point]) -> bool {
         (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
     };
     let in_or_on = |p: (i128, i128)| {
-        let n = b.len();
         let mut crossings = false;
-        for i in 0..n {
-            let (s, t) = (b[i], b[(i + 1) % n]);
+        for (s, t) in ring(&b) {
             let on_line = cross(s, t, p) == 0;
             let within = p.0 >= s.0.min(t.0)
                 && p.0 <= s.0.max(t.0)
@@ -452,15 +450,11 @@ fn inside(a: &[Point], b: &[Point]) -> bool {
         crossings
     };
     let strictly_in_a = |p: (i128, i128)| {
-        let n = a.len();
-        let orient: i128 = (0..n)
-            .map(|i| {
-                let (s, t) = (a[i], a[(i + 1) % n]);
-                s.0 * t.1 - t.0 * s.1
-            })
+        let orient: i128 = ring(&a)
+            .map(|(s, t)| s.0 * t.1 - t.0 * s.1)
             .sum::<i128>()
             .signum();
-        (0..n).all(|i| cross(a[i], a[(i + 1) % n], p) * orient > 0)
+        ring(&a).all(|(s, t)| cross(s, t, p) * orient > 0)
     };
     a.iter().all(|&p| in_or_on(p)) && !b.iter().any(|&p| strictly_in_a(p))
 }
@@ -471,9 +465,7 @@ fn interiors_overlap(a: &[Point], b: &[Point]) -> bool {
     let xy = |p: &Point| (i128::from(p.x.nanometers()), i128::from(p.y.nanometers()));
     let (a, b): (Vec<_>, Vec<_>) = (a.iter().map(xy).collect(), b.iter().map(xy).collect());
     for poly in [&a, &b] {
-        let n = poly.len();
-        for i in 0..n {
-            let (p, q) = (poly[i], poly[(i + 1) % n]);
+        for (p, q) in ring(poly) {
             let axis = (p.1 - q.1, q.0 - p.0);
             if axis == (0, 0) {
                 continue;

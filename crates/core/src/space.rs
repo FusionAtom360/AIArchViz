@@ -23,7 +23,7 @@
 use std::fmt;
 
 use crate::document::{Boundary, Direction, Document, Point};
-use crate::geometry::{GeometryError, wall_geometry};
+use crate::geometry::{GeometryError, ring, wall_geometry};
 use crate::identity::Uuid;
 use crate::length::Length;
 
@@ -142,10 +142,8 @@ impl From<PolygonError> for SpaceError {
 
 /// Twice the signed area, positive when counterclockwise.
 fn twice_signed_area(points: &[Point]) -> i128 {
-    let n = points.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (points[i], points[(i + 1) % n]);
+    ring(points)
+        .map(|(a, b)| {
             i128::from(a.x.nanometers()) * i128::from(b.y.nanometers())
                 - i128::from(b.x.nanometers()) * i128::from(a.y.nanometers())
         })
@@ -181,27 +179,21 @@ fn canonical(mut v: Vec<Xy>) -> Vec<Xy> {
     let mut changed = true;
     while changed && v.len() > 2 {
         changed = false;
-        let n = v.len();
-        for i in 0..n {
-            let (a, b, c) = (v[(i + n - 1) % n], v[i], v[(i + 1) % n]);
-            if (a.0 == b.0 && b.0 == c.0) || (a.1 == b.1 && b.1 == c.1) {
-                v.remove(i);
-                changed = true;
-                break;
-            }
+        // Each vertex with the one before it and the one after it.
+        let before = v.iter().copied().cycle().skip(v.len() - 1);
+        let collinear = before
+            .zip(ring(&v))
+            .position(|(a, (b, c))| (a.0 == b.0 && b.0 == c.0) || (a.1 == b.1 && b.1 == c.1));
+        if let Some(i) = collinear {
+            v.remove(i);
+            changed = true;
         }
     }
-    let n = v.len();
-    let twice: i128 = (0..n)
-        .map(|i| {
-            let (a, b) = (v[i], v[(i + 1) % n]);
-            a.0 * b.1 - b.0 * a.1
-        })
-        .sum();
+    let twice: i128 = ring(&v).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     if twice < 0 {
         v.reverse();
     }
-    if let Some(start) = (0..v.len()).min_by_key(|&i| v[i]) {
+    if let Some((start, _)) = v.iter().enumerate().min_by_key(|(_, p)| **p) {
         v.rotate_left(start);
     }
     v
@@ -223,16 +215,14 @@ pub fn check_polygon(points: &[Point]) -> Result<Vec<Point>, PolygonError> {
     if n < 4 {
         return Err(PolygonError::TooFewVertices);
     }
-    let edge = |i: usize| (v[i], v[(i + 1) % n]);
-    for i in 0..n {
-        let (a, b) = edge(i);
+    let edges: Vec<(Xy, Xy)> = ring(&v).collect();
+    for (i, &(a, b)) in edges.iter().enumerate() {
         if a == b || (a.0 != b.0 && a.1 != b.1) {
             return Err(PolygonError::NotRectilinear { edge: i });
         }
     }
-    for i in 0..n {
+    for (i, ((a, b), (_, c))) in ring(&edges).enumerate() {
         let j = (i + 1) % n;
-        let ((a, b), (_, c)) = (edge(i), edge(j));
         // Consecutive edges along one line in opposite directions overlap.
         let same_line = (a.0 == b.0 && b.0 == c.0) || (a.1 == b.1 && b.1 == c.1);
         let backward = (b.0 - a.0) * (c.0 - b.0) + (b.1 - a.1) * (c.1 - b.1) < 0;
@@ -243,12 +233,12 @@ pub fn check_polygon(points: &[Point]) -> Result<Vec<Point>, PolygonError> {
             });
         }
     }
-    for i in 0..n {
-        for j in i + 2..n {
+    for (i, &first) in edges.iter().enumerate() {
+        for (j, &second) in edges.iter().enumerate().skip(i + 2) {
             if i == 0 && j == n - 1 {
                 continue;
             }
-            if touch(edge(i), edge(j)) {
+            if touch(first, second) {
                 return Err(PolygonError::SelfIntersecting {
                     first: i,
                     second: j,
@@ -310,7 +300,9 @@ impl Grid {
         for (k, r) in rects.iter().enumerate() {
             for j in index(&ys, r.2.1)..index(&ys, r.3.1) {
                 for i in index(&xs, r.2.0)..index(&xs, r.3.0) {
-                    owners[j * nx + i].push(k);
+                    if let Some(cell) = owners.get_mut(j * nx + i) {
+                        cell.push(k);
+                    }
                 }
             }
         }
@@ -330,12 +322,42 @@ impl Grid {
         self.ys.len().saturating_sub(1)
     }
 
-    fn cell(&self, i: usize, j: usize) -> usize {
-        j * self.nx() + i
+    /// The index of cell (i, j) in a row-by-row list, or None outside the grid.
+    fn cell(&self, i: usize, j: usize) -> Option<usize> {
+        (i < self.nx() && j < self.ny()).then(|| j * self.nx() + i)
+    }
+
+    /// The walls covering cell (i, j); none outside the grid.
+    fn owners_at(&self, i: usize, j: usize) -> &[usize] {
+        self.cell(i, j)
+            .and_then(|c| self.owners.get(c))
+            .map_or(&[], Vec::as_slice)
     }
 
     fn covered(&self, i: usize, j: usize) -> bool {
-        !self.owners[self.cell(i, j)].is_empty()
+        !self.owners_at(i, j).is_empty()
+    }
+
+    /// Whether cell (i, j) is set in `cells`; false outside the grid.
+    fn at(&self, cells: &[bool], i: usize, j: usize) -> bool {
+        self.cell(i, j)
+            .and_then(|c| cells.get(c))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Sets cell (i, j) in `cells`; a cell outside the grid does not exist.
+    fn mark(&self, cells: &mut [bool], i: usize, j: usize) {
+        if let Some(c) = self.cell(i, j).and_then(|c| cells.get_mut(c)) {
+            *c = true;
+        }
+    }
+
+    /// The ids of the walls covering cell (i, j).
+    fn wall_ids(&self, i: usize, j: usize) -> impl Iterator<Item = Uuid> + '_ {
+        self.owners_at(i, j)
+            .iter()
+            .filter_map(|&w| self.walls.get(w).map(|w| w.0))
     }
 
     fn on_edge(&self, i: usize, j: usize) -> bool {
@@ -382,14 +404,14 @@ impl Grid {
         // Flood fill the room.
         let mut filled = vec![false; nx * ny];
         let mut stack = vec![(si, sj)];
-        filled[self.cell(si, sj)] = true;
+        self.mark(&mut filled, si, sj);
         while let Some((i, j)) = stack.pop() {
             if self.on_edge(i, j) {
                 return Err(open);
             }
             for (a, b) in self.neighbours(i, j) {
-                if !self.covered(a, b) && !filled[self.cell(a, b)] {
-                    filled[self.cell(a, b)] = true;
+                if !self.covered(a, b) && !self.at(&filled, a, b) {
+                    self.mark(&mut filled, a, b);
                     stack.push((a, b));
                 }
             }
@@ -399,37 +421,32 @@ impl Grid {
         let mut island_walls = std::collections::BTreeSet::new();
         for j in 0..ny {
             for i in 0..nx {
-                if !self.covered(i, j) || seen[self.cell(i, j)] {
+                if !self.covered(i, j) || self.at(&seen, i, j) {
                     continue;
                 }
                 let mut component = vec![(i, j)];
+                let mut pending = vec![(i, j)];
                 let mut enclosed = true;
-                seen[self.cell(i, j)] = true;
-                let mut k = 0;
-                while k < component.len() {
-                    let (a, b) = component[k];
-                    k += 1;
+                self.mark(&mut seen, i, j);
+                while let Some((a, b)) = pending.pop() {
                     if self.on_edge(a, b) {
                         enclosed = false;
                     }
                     for (c, d) in self.neighbours(a, b) {
                         if self.covered(c, d) {
-                            if !seen[self.cell(c, d)] {
-                                seen[self.cell(c, d)] = true;
+                            if !self.at(&seen, c, d) {
+                                self.mark(&mut seen, c, d);
                                 component.push((c, d));
+                                pending.push((c, d));
                             }
-                        } else if !filled[self.cell(c, d)] {
+                        } else if !self.at(&filled, c, d) {
                             enclosed = false;
                         }
                     }
                 }
                 if enclosed {
                     for (a, b) in component {
-                        island_walls.extend(
-                            self.owners[self.cell(a, b)]
-                                .iter()
-                                .map(|&w| self.walls[w].0),
-                        );
+                        island_walls.extend(self.wall_ids(a, b));
                     }
                 }
             }
@@ -452,9 +469,10 @@ impl Grid {
         let room = cells.to_vec();
         // A wall running along X is crossed by a step along Y, and the reverse.
         let crossed = |i: usize, j: usize, step_x: bool| {
-            self.owners[self.cell(i, j)]
+            self.owners_at(i, j)
                 .iter()
-                .any(|&w| self.walls[w].1 != step_x)
+                .filter_map(|&w| self.walls.get(w))
+                .any(|w| w.1 != step_x)
         };
         let step = |i: usize, j: usize, d: usize| -> Option<(usize, usize)> {
             match d {
@@ -466,7 +484,7 @@ impl Grid {
         };
         for j in 0..ny {
             for i in 0..nx {
-                if !room[self.cell(i, j)] {
+                if !self.at(&room, i, j) {
                     continue;
                 }
                 for d in 0..4 {
@@ -475,7 +493,7 @@ impl Grid {
                         if !self.covered(a, b) || !crossed(a, b, d < 2) {
                             break;
                         }
-                        cells[self.cell(a, b)] = true;
+                        self.mark(cells, a, b);
                         at = step(a, b, d);
                     }
                 }
@@ -485,18 +503,18 @@ impl Grid {
         loop {
             let grown = cells.to_vec();
             let is_grown = |at: Option<(usize, usize)>| {
-                at.is_some_and(|(a, b)| grown[self.cell(a, b)] && !room[self.cell(a, b)])
+                at.is_some_and(|(a, b)| self.at(&grown, a, b) && !self.at(&room, a, b))
             };
             let mut added = false;
             for j in 0..ny {
                 for i in 0..nx {
-                    if grown[self.cell(i, j)] || !self.covered(i, j) {
+                    if self.at(&grown, i, j) || !self.covered(i, j) {
                         continue;
                     }
                     let x_side = is_grown(step(i, j, 0)) || is_grown(step(i, j, 1));
                     let y_side = is_grown(step(i, j, 2)) || is_grown(step(i, j, 3));
                     if x_side && y_side {
-                        cells[self.cell(i, j)] = true;
+                        self.mark(cells, i, j);
                         added = true;
                     }
                 }
@@ -510,21 +528,21 @@ impl Grid {
     /// Traces `cells` as one counterclockwise polygon; `id` names the
     /// space in errors.
     fn trace(&self, cells: &[bool], id: Uuid) -> Result<Vec<Point>, SpaceError> {
-        let (nx, ny) = (self.nx(), self.ny());
-        let (xs, ys) = (&self.xs, &self.ys);
         // Every cell side between the region and the rest, directed with
         // the region on its left.
         let mut next: std::collections::BTreeMap<Xy, Vec<Xy>> = std::collections::BTreeMap::new();
         let inside = |i: Option<usize>, j: Option<usize>| match (i, j) {
-            (Some(i), Some(j)) if i < nx && j < ny => cells[self.cell(i, j)],
+            (Some(i), Some(j)) => self.at(cells, i, j),
             _ => false,
         };
-        for j in 0..ny {
-            for i in 0..nx {
-                if !cells[self.cell(i, j)] {
+        for (j, row) in self.ys.windows(2).enumerate() {
+            for (i, column) in self.xs.windows(2).enumerate() {
+                let (&[x0, x1], &[y0, y1]) = (column, row) else {
+                    continue;
+                };
+                if !self.at(cells, i, j) {
                     continue;
                 }
-                let (x0, x1, y0, y1) = (xs[i], xs[i + 1], ys[j], ys[j + 1]);
                 let sides = [
                     (inside(Some(i), j.checked_sub(1)), (x0, y0), (x1, y0)),
                     (inside(Some(i + 1), Some(j)), (x1, y0), (x1, y1)),

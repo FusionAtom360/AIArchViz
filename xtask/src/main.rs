@@ -2,6 +2,7 @@
 
 mod fixtures;
 mod float_lint;
+mod overflow;
 mod slice;
 mod timing;
 
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage: cargo xtask <check | golden | slice>
-  check   float lint, fmt, clippy, tests, release solver timing, wasm32 build of core, cargo deny
+  check   float lint, fmt, clippy, tests, release solver timing, release overflow check, wasm32 build of core, cargo deny
   golden  regenerate schemas/ (document and cli), fixtures/*/commands.txt and the insta snapshots
   slice   replay fixtures/shop and fixtures/l-room and write their DXF, GLB and Scene Package to target/slice";
 
@@ -58,6 +59,9 @@ fn check() -> Result<(), String> {
     cargo(&root, "test", &["test", "--workspace", "--locked"])?;
     step("solver timing (release, under 50 ms)", || {
         timing::step(&root)
+    })?;
+    step("overflow checks (release build of core)", || {
+        overflow::step(&root)
     })?;
     cargo(
         &root,

@@ -1,5 +1,17 @@
 //! C1 core: document model, solver, commands, validation and pure export logic.
 
+// No panics on bad input (CLAUDE.md hard rules, T-199b): outside test code,
+// core may not unwrap, expect, panic or index a slice directly.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 mod canonical;
 mod clearance;
 mod command;

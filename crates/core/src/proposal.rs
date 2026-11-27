@@ -738,7 +738,7 @@ fn matches_branch(value: &Value, b: &Value, root: &Value) -> bool {
                     b.get("required").and_then(Value::as_array),
                 )
             {
-                return req.len() == 1 && req[0].as_str() == Some(k.as_str());
+                return matches!(req.as_slice(), [only] if only.as_str() == Some(k.as_str()));
             }
             b.get("type").and_then(Value::as_str) != Some("null")
         }

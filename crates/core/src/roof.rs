@@ -25,6 +25,7 @@ use std::fmt;
 use crate::document::{
     Axis, Direction, Document, Function, Point, Reference, Source, Sourced, WallSide,
 };
+use crate::geometry::ring;
 use crate::identity::Uuid;
 use crate::length::Length;
 use crate::solver::{SolveError, axis_graph, resolve_reference};
@@ -256,10 +257,8 @@ pub fn roof_outline(document: &Document, id: Uuid) -> Result<Vec<Point>, RoofPro
     };
     // Each edge of the counterclockwise outline faces right of its
     // direction and moves out by that side's overhang.
-    let n = plan.len();
-    let offsets: Vec<(bool, i128)> = (0..n)
-        .map(|i| {
-            let (p, q) = (plan[i], plan[(i + 1) % n]);
+    let offsets: Vec<(bool, i128)> = ring(&plan)
+        .map(|(p, q)| {
             if p.1 == q.1 {
                 if q.0 > p.0 {
                     (true, p.1 - overhang(Direction::NegY))
@@ -273,10 +272,18 @@ pub fn roof_outline(document: &Document, id: Uuid) -> Result<Vec<Point>, RoofPro
             }
         })
         .collect();
-    let grown: Vec<Point> = (0..n)
-        .map(|i| {
-            let (mut x, mut y) = plan[i];
-            for (horizontal, v) in [offsets[(i + n - 1) % n], offsets[i]] {
+    // Each vertex takes the offsets of the edge ending at it and the edge
+    // starting at it.
+    let previous = offsets
+        .iter()
+        .copied()
+        .cycle()
+        .skip(offsets.len().saturating_sub(1));
+    let grown: Vec<Point> = plan
+        .iter()
+        .zip(previous.zip(offsets.iter().copied()))
+        .map(|(&(mut x, mut y), (before, after))| {
+            for (horizontal, v) in [before, after] {
                 if horizontal {
                     y = v;
                 } else {

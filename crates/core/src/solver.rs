@@ -293,20 +293,36 @@ pub(crate) fn axis_graph(doc: &Document, axis: Axis) -> Result<AxisGraph, SolveE
             Axis::Y => p.y.nanometers(),
         })
     };
+    // Each entity's variable, its owner and its solved value.
+    let mut set = |v: usize, id: Uuid, owner: Owner, value: i128| match (
+        owners.get_mut(v),
+        values.get_mut(v),
+    ) {
+        (Some(o), Some(x)) => {
+            *o = owner;
+            *x = value;
+            Ok(())
+        }
+        _ => Err(SolveError::UnknownEntity { id }),
+    };
     for (id, &v) in &engine.nodes {
-        owners[v] = Owner::Node(*id);
-        values[v] = solution.nodes.get(id).map_or(0, pick);
+        set(
+            v,
+            *id,
+            Owner::Node(*id),
+            solution.nodes.get(id).map_or(0, pick),
+        )?;
     }
     for (id, &v) in &engine.openings {
-        owners[v] = Owner::Opening(*id);
-        values[v] = solution
+        let start = solution
             .openings
             .get(id)
             .map_or(0, |l| i128::from(l.nanometers()));
+        set(v, *id, Owner::Opening(*id), start)?;
     }
     for (id, &v) in &engine.items {
-        owners[v] = Owner::Occurrence(*id);
-        values[v] = solution.occurrences.get(id).map_or(0, pick);
+        let center = solution.occurrences.get(id).map_or(0, pick);
+        set(v, *id, Owner::Occurrence(*id), center)?;
     }
     let mut edges = Vec::new();
     for w in doc.walls.values() {
@@ -498,23 +514,37 @@ impl Axis1 {
         }
     }
 
-    /// The root of `i` and value(i) - value(root).
+    /// The root of `i` and value(i) - value(root). A variable outside the
+    /// axis has no relations, so it is its own root.
     fn find(&mut self, i: usize) -> (usize, i128) {
         let mut path = Vec::new();
         let mut root = i;
-        while self.parent[root] != root {
+        while let Some(&up) = self.parent.get(root) {
+            if up == root {
+                break;
+            }
             path.push(root);
-            root = self.parent[root];
+            root = up;
         }
         // Compress from the top of the path down, so each offset is to root.
         for &node in path.iter().rev() {
-            let p = self.parent[node];
+            let p = self.parent.get(node).copied().unwrap_or(root);
             if p != root {
-                self.offset[node] += self.offset[p];
+                let to_root = self.offset.get(p).copied().unwrap_or(0);
+                if let Some(o) = self.offset.get_mut(node) {
+                    *o += to_root;
+                }
             }
-            self.parent[node] = root;
+            if let Some(slot) = self.parent.get_mut(node) {
+                *slot = root;
+            }
         }
-        (root, if i == root { 0 } else { self.offset[i] })
+        let off = if i == root {
+            0
+        } else {
+            self.offset.get(i).copied().unwrap_or(0)
+        };
+        (root, off)
     }
 
     /// value(b) - value(a), if `a` and `b` are in one class.
@@ -530,18 +560,28 @@ impl Axis1 {
         let (rb, ob) = self.find(b);
         // value(rb) - value(ra) = d + oa - ob
         let delta = d + oa - ob;
-        if self.rank[ra] >= self.rank[rb] {
-            self.parent[rb] = ra;
-            self.offset[rb] = delta;
-            if self.rank[ra] == self.rank[rb] {
-                self.rank[ra] = self.rank[ra].saturating_add(1);
-            }
+        let rank = |r: usize| self.rank.get(r).copied().unwrap_or(0);
+        let (rank_a, rank_b) = (rank(ra), rank(rb));
+        // The lower-ranked root goes under the other, at its offset.
+        let (child, root, off) = if rank_a >= rank_b {
+            (rb, ra, delta)
         } else {
-            self.parent[ra] = rb;
-            self.offset[ra] = -delta;
+            (ra, rb, -delta)
+        };
+        if let (Some(p), Some(o)) = (self.parent.get_mut(child), self.offset.get_mut(child)) {
+            *p = root;
+            *o = off;
         }
-        self.edges[a].push((b, label));
-        self.edges[b].push((a, label));
+        if rank_a == rank_b
+            && let Some(r) = self.rank.get_mut(ra)
+        {
+            *r = r.saturating_add(1);
+        }
+        for (from, to) in [(a, b), (b, a)] {
+            if let Some(list) = self.edges.get_mut(from) {
+                list.push((to, label));
+            }
+        }
     }
 
     /// The constraints on the accepted path from `a` to `b`, sorted.
@@ -553,7 +593,7 @@ impl Axis1 {
             if v == b {
                 break;
             }
-            for &(w, label) in &self.edges[v] {
+            for &(w, label) in self.edges.get(v).map_or(&[][..], Vec::as_slice) {
                 if seen.insert(w) {
                     prev.insert(w, (v, label));
                     queue.push_back(w);
@@ -572,10 +612,12 @@ impl Axis1 {
     }
 }
 
-fn axis_index(axis: Axis) -> usize {
+/// The entry for `axis` in a per-axis pair (X first).
+fn on_axis<T>(pair: &mut [T; 2], axis: Axis) -> &mut T {
+    let [x, y] = pair;
     match axis {
-        Axis::X => 0,
-        Axis::Y => 1,
+        Axis::X => x,
+        Axis::Y => y,
     }
 }
 
@@ -610,7 +652,7 @@ fn half(n: i128) -> i128 {
 
 /// A linear relation between two references: value(b) - value(a) = d.
 struct Relation {
-    axis: usize,
+    axis: Axis,
     a: usize,
     b: usize,
     /// Constant parts: coordinate(ref) = value(var) + constant.
@@ -693,7 +735,7 @@ impl<'d> Engine<'d> {
             let a = engine.node(wall.node_a)?;
             let b = engine.node(wall.node_b)?;
             let (axis, _) = wall_frame(wall.direction);
-            let ax = &mut engine.axes[axis_index(axis)];
+            let ax = on_axis(&mut engine.axes, axis);
             if ax.relation(a, b).is_none() {
                 ax.union(a, b, 0, Label::Wall);
             }
@@ -828,8 +870,8 @@ impl<'d> Engine<'d> {
                             return Err(SolveError::NoSuchBoundary { constraint });
                         }
                         match side {
-                            WallSide::Left => left - t[..k].iter().sum::<i128>(),
-                            WallSide::Right => left - total + t[t.len() - k..].iter().sum::<i128>(),
+                            WallSide::Left => left - t.iter().take(k).sum::<i128>(),
+                            WallSide::Right => left - total + t.iter().rev().take(k).sum::<i128>(),
                         }
                     }
                     _ => left - half(total),
@@ -871,7 +913,7 @@ impl<'d> Engine<'d> {
             let (va, ca) = self.resolve(a, axis, id)?;
             let (vb, cb) = self.resolve(b, axis, id)?;
             Ok(Relation {
-                axis: axis_index(axis),
+                axis,
                 a: va,
                 b: vb,
                 ca,
@@ -887,7 +929,7 @@ impl<'d> Engine<'d> {
             } => {
                 let (v, cv) = self.resolve(reference, *axis, id)?;
                 Some(Relation {
-                    axis: axis_index(*axis),
+                    axis: *axis,
                     a: 0,
                     b: v,
                     ca: 0,
@@ -914,7 +956,7 @@ impl<'d> Engine<'d> {
             for (axis, stored) in [(Axis::X, o.center.x), (Axis::Y, o.center.y)] {
                 let (v, c) = self.item_center(*id, axis)?;
                 let d = i128::from(stored.nanometers()) - c;
-                let ax = &mut self.axes[axis_index(axis)];
+                let ax = on_axis(&mut self.axes, axis);
                 match ax.relation(0, v) {
                     None => ax.union(0, v, d, Label::Constraint(*id)),
                     Some(current) if current == d => {}
@@ -950,7 +992,7 @@ impl<'d> Engine<'d> {
                 .ok_or(SolveError::UnknownEntity { id: *id })?;
             let (rv, rc) = self.resolve(reference, along, *id)?;
             let d = rc + dir * i128::from(offset.value.nanometers());
-            let ax = &mut self.axes[axis_index(along)];
+            let ax = on_axis(&mut self.axes, along);
             match ax.relation(rv, var) {
                 None => ax.union(rv, var, d, Label::Constraint(*id)),
                 Some(current) if current == d => {}
@@ -969,7 +1011,7 @@ impl<'d> Engine<'d> {
             let (rv, rc) = self.resolve(&o.reference, along, *id)?;
             let offset = i128::from(o.offset.value.nanometers());
             let d = rc + dir * offset - edge_shift(o.anchor, dir, width);
-            let ax = &mut self.axes[axis_index(along)];
+            let ax = on_axis(&mut self.axes, along);
             match ax.relation(rv, var) {
                 None => ax.union(rv, var, d, Label::Constraint(*id)),
                 Some(current) if current == d => {}
@@ -1073,7 +1115,7 @@ impl<'d> Engine<'d> {
                     continue;
                 };
                 let v = value.unwrap_or(0);
-                let ax = &mut self.axes[rel.axis];
+                let ax = on_axis(&mut self.axes, rel.axis);
                 let computed = ax.relation(rel.a, rel.b).map(|d| d + rel.cb - rel.ca);
                 let residual = computed.map(|x| x - v);
                 let outcome = if !driving {
@@ -1134,8 +1176,8 @@ impl<'d> Engine<'d> {
         let mut item_centers: [BTreeMap<Uuid, i128>; 2] = [BTreeMap::new(), BTreeMap::new()];
         let mut classes: [BTreeMap<usize, BTreeSet<Member>>; 2] =
             [BTreeMap::new(), BTreeMap::new()];
-        for (k, axis) in [Axis::X, Axis::Y].into_iter().enumerate() {
-            let ax = &mut self.axes[k];
+        for axis in [Axis::X, Axis::Y] {
+            let ax = on_axis(&mut self.axes, axis);
             let (ground_root, ground_off) = ax.find(0);
             let mut anchors: BTreeMap<usize, i128> = BTreeMap::new();
             for (id, &var) in &self.nodes {
@@ -1148,13 +1190,13 @@ impl<'d> Engine<'d> {
                         Axis::Y => n.y.nanometers(),
                     });
                     let base = *anchors.entry(root).or_insert(i128::from(stored) - off);
-                    classes[k]
+                    on_axis(&mut classes, axis)
                         .entry(root)
                         .or_default()
                         .insert(Member::Node(*id));
                     base + off
                 };
-                coords[k].insert(*id, value);
+                on_axis(&mut coords, axis).insert(*id, value);
             }
             for (id, wall) in &doc.walls {
                 let (line_axis, _) = wall_frame(wall.direction);
@@ -1162,8 +1204,8 @@ impl<'d> Engine<'d> {
                     continue;
                 }
                 let var = self.node(wall.node_a)?;
-                let (root, _) = self.axes[k].find(var);
-                if let Some(members) = classes[k].get_mut(&root) {
+                let (root, _) = on_axis(&mut self.axes, axis).find(var);
+                if let Some(members) = on_axis(&mut classes, axis).get_mut(&root) {
                     members.insert(Member::Wall(*id));
                 }
             }
@@ -1178,13 +1220,13 @@ impl<'d> Engine<'d> {
                 if along_frame(host.direction).0 != axis {
                     continue;
                 }
-                let (root, off) = self.axes[k].find(var);
+                let (root, off) = on_axis(&mut self.axes, axis).find(var);
                 let value = if root == ground_root {
                     off - ground_off
                 } else {
                     let stored = i128::from(o.start.nanometers());
                     let base = *anchors.entry(root).or_insert(stored - off);
-                    classes[k]
+                    on_axis(&mut classes, axis)
                         .entry(root)
                         .or_default()
                         .insert(Member::Opening(*id));
@@ -1214,24 +1256,27 @@ impl<'d> Engine<'d> {
                             .find(|(_, v)| **v == node_var)
                             .map(|(n, _)| *n)
                             .ok_or(SolveError::UnknownEntity { id: *wall })?;
-                        let line = coords[k].get(&node_id).copied().unwrap_or(0);
-                        item_centers[k].insert(*id, line + c);
+                        let line = on_axis(&mut coords, axis)
+                            .get(&node_id)
+                            .copied()
+                            .unwrap_or(0);
+                        on_axis(&mut item_centers, axis).insert(*id, line + c);
                         continue;
                     }
                 }
-                let ax = &mut self.axes[k];
+                let ax = on_axis(&mut self.axes, axis);
                 let (root, off) = ax.find(var);
                 let value = if root == ground_root {
                     off - ground_off
                 } else {
                     let base = *anchors.entry(root).or_insert(stored - off);
-                    classes[k]
+                    on_axis(&mut classes, axis)
                         .entry(root)
                         .or_default()
                         .insert(Member::Occurrence(*id));
                     base + off
                 };
-                item_centers[k].insert(*id, value);
+                on_axis(&mut item_centers, axis).insert(*id, value);
             }
         }
         let mut nodes = BTreeMap::new();
@@ -1247,8 +1292,8 @@ impl<'d> Engine<'d> {
             );
         }
         let mut underconstrained = Vec::new();
-        for (k, axis) in [Axis::X, Axis::Y].into_iter().enumerate() {
-            let mut list: Vec<Vec<Member>> = classes[k]
+        for (axis, class) in [Axis::X, Axis::Y].into_iter().zip(&classes) {
+            let mut list: Vec<Vec<Member>> = class
                 .values()
                 .map(|m| m.iter().copied().collect())
                 .collect();

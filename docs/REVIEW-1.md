@@ -122,7 +122,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Today:** core contains none of these (I searched). But CLAUDE.md's "no f32 or f64" rule is weaker than it looks. `core_crate_is_clean` would still pass if one were added.
 
 ### M-5: No tooling enforces "no panics" and "never wraps"
-- **Status: open**, planned as T-199b.
+- **Status: closed** by T-199b (2026-11-27). The release profile sets `overflow-checks = true` and `cargo xtask check` runs `length::tests::unchecked_arithmetic_panics_on_overflow` in a release build; core denies `unwrap_used`, `expect_used`, `panic` and `indexing_slicing` outside tests, and the listed paths use iterators or `get`. `arithmetic_side_effects` stays off (Q-74).
 - **Where:** `Cargo.toml:21-25`. The workspace denies `clippy::all` but not:
   - `clippy::arithmetic_side_effects`
   - `clippy::indexing_slicing`

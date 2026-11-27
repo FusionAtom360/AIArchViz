@@ -133,6 +133,9 @@ struct WallInfo {
     ends: [i128; 2],
     /// Across coordinates of the layer boundaries, left face first.
     bounds: Vec<i128>,
+    /// The first and last of `bounds`: the left and right faces.
+    left_face: i128,
+    right_face: i128,
     lo: i128,
     hi: i128,
 }
@@ -146,6 +149,15 @@ enum Cut {
         inner: (i128, i128),
         outer: (i128, i128),
     },
+}
+
+/// The edges of a closed polygon: each vertex paired with the next, the last
+/// with the first.
+pub(crate) fn ring<T: Copy>(points: &[T]) -> impl Iterator<Item = (T, T)> + '_ {
+    points
+        .iter()
+        .copied()
+        .zip(points.iter().copied().cycle().skip(1))
 }
 
 /// `n / d` rounded half to even; `d` must not be zero.
@@ -203,12 +215,13 @@ fn walls(document: &Document) -> Result<Vec<WallInfo>, GeometryError> {
             .ok_or(GeometryError::UnknownEntity { id: w.layer_set })?;
         let mut bounds = Vec::with_capacity(set.layers.len() + 1);
         let mut from_left = i128::from(w.left_extent.value.nanometers());
-        bounds.push(va + f.left * from_left);
+        let first = va + f.left * from_left;
+        bounds.push(first);
         for layer in &set.layers {
             from_left -= i128::from(layer.thickness.value.nanometers());
             bounds.push(va + f.left * from_left);
         }
-        let (first, last) = (bounds[0], bounds[bounds.len() - 1]);
+        let last = va + f.left * from_left;
         out.push(WallInfo {
             id: *id,
             frame: f,
@@ -217,6 +230,8 @@ fn walls(document: &Document) -> Result<Vec<WallInfo>, GeometryError> {
             ends: [ua, ub],
             lo: first.min(last),
             hi: first.max(last),
+            left_face: first,
+            right_face: last,
             bounds,
         });
     }
@@ -224,12 +239,20 @@ fn walls(document: &Document) -> Result<Vec<WallInfo>, GeometryError> {
 }
 
 /// One wall arriving at a node: its index, which end, and the sign of the
-/// direction its body extends from the node along its own axis.
+/// direction its body extends from the node along its own axis, with the
+/// parts of the wall's WallInfo the join needs.
 #[derive(Debug, Clone, Copy)]
 struct Arm {
     wall: usize,
     end: usize,
     body: i128,
+    along_x: bool,
+    /// The along coordinate of this end.
+    at: i128,
+    lo: i128,
+    hi: i128,
+    priority: u32,
+    id: Uuid,
 }
 
 /// The cut at each (wall index, end) pair.
@@ -243,11 +266,19 @@ fn joins(
     let mut arms: BTreeMap<Uuid, Vec<Arm>> =
         document.nodes.keys().map(|id| (*id, Vec::new())).collect();
     for (i, w) in walls.iter().enumerate() {
-        for end in 0..2 {
+        for (end, (node, at)) in w.nodes.into_iter().zip(w.ends).enumerate() {
             let body = if end == 0 { w.frame.dir } else { -w.frame.dir };
-            arms.entry(w.nodes[end])
-                .or_default()
-                .push(Arm { wall: i, end, body });
+            arms.entry(node).or_default().push(Arm {
+                wall: i,
+                end,
+                body,
+                along_x: w.frame.along_x,
+                at,
+                lo: w.lo,
+                hi: w.hi,
+                priority: w.priority,
+                id: w.id,
+            });
         }
     }
     let mut types = BTreeMap::new();
@@ -255,24 +286,24 @@ fn joins(
     for (node, arms) in &arms {
         let mut seen = std::collections::BTreeSet::new();
         for a in arms {
-            if !seen.insert((walls[a.wall].frame.along_x, a.body)) {
+            if !seen.insert((a.along_x, a.body)) {
                 return Err(GeometryError::SameDirection { node: *node });
             }
         }
-        let at_node = |a: &Arm| walls[a.wall].ends[a.end];
+        let at_node = |a: &Arm| a.at;
         let join = match arms.as_slice() {
             [] => JoinType::Isolated,
             [a] => {
                 cuts.insert((a.wall, a.end), Cut::Square(at_node(a)));
                 JoinType::FreeEnd
             }
-            [a, b] if walls[a.wall].frame.along_x == walls[b.wall].frame.along_x => {
+            [a, b] if a.along_x == b.along_x => {
                 cuts.insert((a.wall, a.end), Cut::Square(at_node(a)));
                 cuts.insert((b.wall, b.end), Cut::Square(at_node(b)));
                 JoinType::Straight
             }
             [a, b] => {
-                let (wa, wb) = (&walls[a.wall], &walls[b.wall]);
+                let (wa, wb) = (a, b);
                 // In A's frame: along = B's across, across = B's along.
                 let (outer_u, inner_u) = if a.body > 0 {
                     (wb.lo, wb.hi)
@@ -303,19 +334,12 @@ fn joins(
             _ => {
                 let lowest = arms
                     .iter()
-                    .min_by_key(|a| (walls[a.wall].priority, walls[a.wall].id))
-                    .map(|a| walls[a.wall].frame.along_x);
-                let (through, crossing): (Vec<&Arm>, Vec<&Arm>) = arms
-                    .iter()
-                    .partition(|a| Some(walls[a.wall].frame.along_x) == lowest);
+                    .min_by_key(|a| (a.priority, a.id))
+                    .map(|a| a.along_x);
+                let (through, crossing): (Vec<&Arm>, Vec<&Arm>) =
+                    arms.iter().partition(|a| Some(a.along_x) == lowest);
                 let extreme = |set: &[&Arm], low_side: bool| {
-                    let it = set.iter().map(|a| {
-                        if low_side {
-                            walls[a.wall].lo
-                        } else {
-                            walls[a.wall].hi
-                        }
-                    });
+                    let it = set.iter().map(|a| if low_side { a.lo } else { a.hi });
                     if low_side { it.min() } else { it.max() }
                 };
                 for c in &crossing {
@@ -344,18 +368,12 @@ fn joins(
 
 /// Orders a polygon counterclockwise from its lowest-x, then lowest-y vertex.
 fn normalize(points: Vec<(i128, i128)>) -> Result<Vec<Point>, GeometryError> {
-    let n = points.len();
-    let twice_area: i128 = (0..n)
-        .map(|i| {
-            let (a, b) = (points[i], points[(i + 1) % n]);
-            a.0 * b.1 - b.0 * a.1
-        })
-        .sum();
+    let twice_area: i128 = ring(&points).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
     let mut points = points;
     if twice_area < 0 {
         points.reverse();
     }
-    if let Some(start) = (0..n).min_by_key(|&i| points[i]) {
+    if let Some((start, _)) = points.iter().enumerate().min_by_key(|(_, p)| **p) {
         points.rotate_left(start);
     }
     points
@@ -394,12 +412,9 @@ pub fn wall_geometry(document: &Document) -> Result<BTreeMap<Uuid, WallGeometry>
     let (_, cuts) = joins(document, &walls)?;
     let mut out = BTreeMap::new();
     for (i, w) in walls.iter().enumerate() {
-        let cut = |end: usize| {
-            cuts.get(&(i, end))
-                .copied()
-                .unwrap_or(Cut::Square(w.ends[end]))
-        };
-        let (ca, cb) = (cut(0), cut(1));
+        let cut = |end: usize, at: i128| cuts.get(&(i, end)).copied().unwrap_or(Cut::Square(at));
+        let [ua, ub] = w.ends;
+        let (ca, cb) = (cut(0, ua), cut(1, ub));
         let quad = |v1: i128, v2: i128| {
             let uv = [
                 (ca.at(v1), v1),
@@ -413,11 +428,12 @@ pub fn wall_geometry(document: &Document) -> Result<BTreeMap<Uuid, WallGeometry>
                 .collect();
             normalize(xy)
         };
-        let footprint = quad(w.bounds[0], w.bounds[w.bounds.len() - 1])?;
+        let footprint = quad(w.left_face, w.right_face)?;
         let layers = w
             .bounds
-            .windows(2)
-            .map(|pair| quad(pair[0], pair[1]))
+            .iter()
+            .zip(w.bounds.iter().skip(1))
+            .map(|(&v1, &v2)| quad(v1, v2))
             .collect::<Result<Vec<_>, _>>()?;
         out.insert(w.id, WallGeometry { footprint, layers });
     }
@@ -525,21 +541,17 @@ pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>,
             WallTop::Roof { roof } => roofs.get(roof).and_then(Option::as_ref),
             _ => None,
         };
-        let cut = |end: usize| {
-            cuts.get(&(i, end))
-                .copied()
-                .unwrap_or(Cut::Square(w.ends[end]))
-        };
-        let faces = [w.bounds[0], w.bounds[w.bounds.len() - 1]];
+        let cut = |end: usize, at: i128| cuts.get(&(i, end)).copied().unwrap_or(Cut::Square(at));
+        let [ua, ub] = w.ends;
         let dir = w.frame.dir;
         // Outermost and innermost of the two faces' cuts, seen along the direction.
         let span = |c: Cut, toward: i128| {
-            let (p, q) = (c.at(faces[0]), c.at(faces[1]));
+            let (p, q) = (c.at(w.left_face), c.at(w.right_face));
             let (lo, hi) = (p.min(q), p.max(q));
             if toward > 0 { (hi, lo) } else { (lo, hi) }
         };
-        let (start, full_start) = span(cut(0), -dir);
-        let (end, full_end) = span(cut(1), dir);
+        let (start, full_start) = span(cut(0, ua), -dir);
+        let (end, full_end) = span(cut(1, ub), dir);
         let mut voids: Vec<(i128, Void)> = Vec::new();
         for (id, o) in document.openings.iter().filter(|(_, o)| o.host == w.id) {
             let s0 = i128::from(o.start.nanometers());
@@ -578,7 +590,7 @@ pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>,
             if g.axis() == wall_axis {
                 under(u)
             } else {
-                Ok(under(faces[0])?.max(under(faces[1])?))
+                Ok(under(w.left_face)?.max(under(w.right_face)?))
             }
         };
         let mut top_edge = Vec::with_capacity(along.len());

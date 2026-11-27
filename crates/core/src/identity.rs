@@ -73,7 +73,11 @@ impl Uuid {
     /// each of the other 21 carries 6 bits.
     pub fn global_id(&self) -> String {
         let v = u128::from_be_bytes(*self.as_bytes());
-        let digit = |shift: u32| IFC_BASE64[((v >> shift) & 63) as usize] as char;
+        // The 6-bit value's place in IFC_BASE64; the mask keeps it in 0..64.
+        let digit = |shift: u32| {
+            let i = ((v >> shift) & 63) as usize;
+            IFC_BASE64.get(i).map_or('$', |&b| char::from(b))
+        };
         let mut out = String::with_capacity(22);
         out.push(digit(126));
         for i in (0..21).rev() {

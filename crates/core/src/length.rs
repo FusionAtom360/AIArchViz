@@ -141,6 +141,21 @@ mod tests {
         Length::from_nanometers(v)
     }
 
+    /// T-199b: every profile builds core with overflow checks, so unchecked
+    /// arithmetic that overflows panics instead of wrapping. `cargo xtask
+    /// check` runs this test in a release build (xtask/src/overflow.rs).
+    #[test]
+    fn unchecked_arithmetic_panics_on_overflow() {
+        use std::hint::black_box;
+        use std::panic::catch_unwind;
+        let wide = catch_unwind(|| black_box(i128::MAX) + black_box(1));
+        assert!(wide.is_err(), "i128::MAX + 1 gave {wide:?}");
+        let narrow = catch_unwind(|| black_box(i64::MIN) - black_box(1));
+        assert!(narrow.is_err(), "i64::MIN - 1 gave {narrow:?}");
+        let product = catch_unwind(|| black_box(i64::MAX) * black_box(2));
+        assert!(product.is_err(), "i64::MAX * 2 gave {product:?}");
+    }
+
     #[test]
     fn one_inch_is_25_400_000_nm() {
         assert_eq!(Length::from_inches(1), Ok(nm(25_400_000)));

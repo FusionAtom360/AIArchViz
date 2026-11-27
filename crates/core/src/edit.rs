@@ -218,39 +218,65 @@ fn along(direction: Direction) -> Axis {
 /// non-rigid edges between groups.
 struct Contracted {
     group: Vec<usize>,
-    /// (edge index, group a, group b).
-    edges: Vec<(usize, usize, usize)>,
+    /// (edge index, group a, group b, edge kind).
+    edges: Vec<(usize, usize, usize, EdgeKind)>,
+}
+
+impl Contracted {
+    /// The group of variable `v`. A variable outside the graph has no ties,
+    /// so it is a group of its own.
+    fn group(&self, v: usize) -> usize {
+        self.group.get(v).copied().unwrap_or(v)
+    }
+}
+
+/// The root of `i` in a union-find whose parents never exceed their child,
+/// compressing the path. An index outside `p` is its own root.
+fn find_root(p: &mut [usize], i: usize) -> usize {
+    let mut root = i;
+    while let Some(&up) = p.get(root) {
+        if up == root {
+            break;
+        }
+        root = up;
+    }
+    let mut v = i;
+    while v != root {
+        let Some(slot) = p.get_mut(v) else {
+            break;
+        };
+        v = std::mem::replace(slot, root);
+    }
+    root
 }
 
 fn contract(g: &AxisGraph) -> Contracted {
     let n = g.owners.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    fn find(p: &mut [usize], mut i: usize) -> usize {
-        while p[i] != i {
-            p[i] = p[p[i]];
-            i = p[i];
-        }
-        i
-    }
     for e in &g.edges {
         if e.kind == EdgeKind::Rigid {
-            let (a, b) = (find(&mut parent, e.a), find(&mut parent, e.b));
+            let (a, b) = (find_root(&mut parent, e.a), find_root(&mut parent, e.b));
             if a != b {
                 let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-                parent[hi] = lo;
+                if let Some(slot) = parent.get_mut(hi) {
+                    *slot = lo;
+                }
             }
         }
     }
-    let group: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
-    let edges = g
+    let mut c = Contracted {
+        group: (0..n).map(|i| find_root(&mut parent, i)).collect(),
+        edges: Vec::new(),
+    };
+    c.edges = g
         .edges
         .iter()
         .enumerate()
         .filter(|(_, e)| e.kind != EdgeKind::Rigid)
-        .map(|(i, e)| (i, group[e.a], group[e.b]))
-        .filter(|(_, a, b)| a != b)
+        .map(|(i, e)| (i, c.group(e.a), c.group(e.b), e.kind))
+        .filter(|(_, a, b, _)| a != b)
         .collect();
-    Contracted { group, edges }
+    c
 }
 
 /// Groups reachable from `start` without crossing `skip` edges or entering `avoid`.
@@ -263,7 +289,7 @@ fn reach(
     let mut seen = BTreeSet::from([start]);
     let mut queue = VecDeque::from([start]);
     while let Some(v) = queue.pop_front() {
-        for &(i, a, b) in &c.edges {
+        for &(i, a, b, _) in &c.edges {
             if skip.contains(&i) {
                 continue;
             }
@@ -291,7 +317,7 @@ fn path(c: &Contracted, from: usize, to: usize) -> Vec<usize> {
         if v == to {
             break;
         }
-        for &(i, a, b) in &c.edges {
+        for &(i, a, b, _) in &c.edges {
             let w = if a == v {
                 b
             } else if b == v {
@@ -318,17 +344,16 @@ fn path(c: &Contracted, from: usize, to: usize) -> Vec<usize> {
 /// What moves when `change` edges take up the move: the groups pulled
 /// along with `r`, or the Fixed items or datum that would have to move.
 fn propagate(
-    g: &AxisGraph,
     c: &Contracted,
     r: usize,
     change: &BTreeSet<usize>,
 ) -> Result<BTreeSet<usize>, Result<Vec<Uuid>, MoveError>> {
-    let ground = c.group[0];
+    let ground = c.group(0);
     let mut moving = BTreeSet::from([r]);
     let mut queue = VecDeque::from([r]);
     let mut fixed = BTreeSet::new();
     while let Some(v) = queue.pop_front() {
-        for &(i, a, b) in &c.edges {
+        for &(i, a, b, kind) in &c.edges {
             let w = if a == v {
                 b
             } else if b == v {
@@ -339,7 +364,7 @@ fn propagate(
             if change.contains(&i) || moving.contains(&w) {
                 continue;
             }
-            if let EdgeKind::Anchor(item) = g.edges[i].kind {
+            if let EdgeKind::Anchor(item) = kind {
                 fixed.insert(item);
                 continue;
             }
@@ -359,27 +384,24 @@ fn propagate(
 
 /// The edits that make `change` edges take up a move of `delta`.
 fn edits_for(
-    g: &AxisGraph,
     c: &Contracted,
     moving: &BTreeSet<usize>,
     change: &BTreeSet<usize>,
     delta: i128,
 ) -> Result<Vec<SetConstraintValue>, MoveError> {
     let mut out = Vec::new();
-    for &i in change {
-        let e = g.edges[i];
+    // An edge whose ends share a group is not in `c.edges`: both its ends
+    // move or neither does, so it takes up nothing.
+    for &(_, a, b, kind) in c.edges.iter().filter(|e| change.contains(&e.0)) {
         let EdgeKind::Editable {
             target,
             value,
             coef,
-        } = e.kind
+        } = kind
         else {
             continue;
         };
-        let (in_a, in_b) = (
-            moving.contains(&c.group[e.a]),
-            moving.contains(&c.group[e.b]),
-        );
+        let (in_a, in_b) = (moving.contains(&a), moving.contains(&b));
         if in_a == in_b {
             continue;
         }
@@ -464,7 +486,7 @@ fn choice_edges(g: &AxisGraph, ids: &[Uuid]) -> Result<BTreeSet<usize>, MoveErro
 }
 
 fn edge_id(g: &AxisGraph, i: usize) -> Option<Uuid> {
-    match g.edges[i].kind {
+    match g.edges.get(i)?.kind {
         EdgeKind::Editable { target, .. } => Some(target.id()),
         _ => None,
     }
@@ -501,16 +523,16 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
     let (rv, delta) = displacement_on(doc, &g, req)?;
     let delta_len = Length::from_nanometers(i64::try_from(delta).map_err(|_| MoveError::Overflow)?);
     let c = contract(&g);
-    let r = c.group[rv];
-    let ground = c.group[0];
+    let r = c.group(rv);
+    let ground = c.group(0);
     let none = BTreeSet::new();
 
     // Nothing links it to ground: translate the free class (Q-38).
     let class = reach(&c, r, &none, None);
     if !class.contains(&ground) {
         let mut edits = Vec::new();
-        for (var, owner) in g.owners.iter().enumerate() {
-            if !class.contains(&c.group[var]) {
+        for (var, (owner, &current)) in g.owners.iter().zip(&g.values).enumerate() {
+            if !class.contains(&c.group(var)) {
                 continue;
             }
             let target = match owner {
@@ -529,7 +551,7 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
                 },
                 _ => continue,
             };
-            let value = i64::try_from(g.values[var] + delta).map_err(|_| MoveError::Overflow)?;
+            let value = i64::try_from(current + delta).map_err(|_| MoveError::Overflow)?;
             edits.push(SetConstraintValue {
                 target,
                 value: Length::from_nanometers(value),
@@ -549,8 +571,8 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
     let anchored: Vec<Uuid> = c
         .edges
         .iter()
-        .filter(|(_, a, b)| *a == r || *b == r)
-        .filter_map(|(i, _, _)| match g.edges[*i].kind {
+        .filter(|(_, a, b, _)| *a == r || *b == r)
+        .filter_map(|&(_, _, _, kind)| match kind {
             EdgeKind::Anchor(item) => Some(item),
             _ => None,
         })
@@ -567,20 +589,22 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
     let absorb = choice_edges(&g, &req.absorb)?;
     // The editable bridge nearest the moved reference on a path to ground.
     let route = path(&c, r, ground);
-    let bridge = route.iter().copied().find(|&i| {
-        matches!(g.edges[i].kind, EdgeKind::Editable { .. })
-            && !reach(&c, r, &BTreeSet::from([i]), None).contains(&ground)
-    });
+    let bridge = route
+        .iter()
+        .filter_map(|&i| c.edges.iter().find(|e| e.0 == i).copied())
+        .find(|&(i, _, _, kind)| {
+            matches!(kind, EdgeKind::Editable { .. })
+                && !reach(&c, r, &BTreeSet::from([i]), None).contains(&ground)
+        });
     let finish = |change: BTreeSet<usize>| -> Result<(Vec<SetConstraintValue>, BTreeSet<usize>), MoveOutcome> {
-        match propagate(&g, &c, r, &change) {
-            Ok(moving) => Ok((edits_for(&g, &c, &moving, &change, delta).map_err(|_| MoveOutcome::Obstructed { fixed: vec![], delta: delta_len })?, moving)),
+        match propagate(&c, r, &change) {
+            Ok(moving) => Ok((edits_for(&c, &moving, &change, delta).map_err(|_| MoveOutcome::Obstructed { fixed: vec![], delta: delta_len })?, moving)),
             Err(Ok(fixed)) => Err(MoveOutcome::Obstructed { fixed, delta: delta_len }),
             Err(Err(_)) => Err(MoveOutcome::Obstructed { fixed: vec![], delta: delta_len }),
         }
     };
     match bridge {
-        Some(e) => {
-            let (ea, eb) = (c.group[g.edges[e].a], c.group[g.edges[e].b]);
+        Some((e, ea, eb, _)) => {
             let case = if ea == ground || eb == ground {
                 Case::A
             } else {
@@ -595,14 +619,15 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
             let mut alternatives = Vec::new();
             if case == Case::B && absorb.is_empty() {
                 // Each editable edge leaving the moved entity inside the moving part.
-                for &(i, a, b) in &c.edges {
+                for &(i, a, b, kind) in &c.edges {
                     let inside = moving.contains(&a) && moving.contains(&b);
                     if i == e || !(a == r || b == r) || !inside {
                         continue;
                     }
-                    let Some(choice) = edge_id(&g, i) else {
+                    let EdgeKind::Editable { target, .. } = kind else {
                         continue;
                     };
+                    let choice = target.id();
                     let mut alt = change.clone();
                     alt.insert(i);
                     if let Ok((alt_edits, _)) = finish(alt) {
@@ -630,7 +655,7 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
             let routes: BTreeSet<usize> = c
                 .edges
                 .iter()
-                .filter(|(i, a, b)| {
+                .filter(|(_, a, b, kind)| {
                     let other = if *a == r {
                         *b
                     } else if *b == r {
@@ -638,10 +663,10 @@ pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutc
                     } else {
                         return false;
                     };
-                    matches!(g.edges[*i].kind, EdgeKind::Editable { .. })
+                    matches!(kind, EdgeKind::Editable { .. })
                         && (other == ground || reach(&c, other, &none, Some(r)).contains(&ground))
                 })
-                .map(|(i, _, _)| *i)
+                .map(|(i, _, _, _)| *i)
                 .collect();
             let mut change = routes.clone();
             change.extend(absorb.iter().copied());

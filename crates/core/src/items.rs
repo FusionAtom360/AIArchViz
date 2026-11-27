@@ -37,21 +37,20 @@ pub(crate) fn half(n: i128) -> i128 {
 /// The world direction a side of an item faces at `rotation` quarter turns.
 pub(crate) fn side_direction(rotation: u8, side: ItemSide) -> Direction {
     use Direction::{NegX, NegY, PosX, PosY};
-    let front = [NegY, PosX, PosY, NegX];
-    let left = [NegX, NegY, PosX, PosY];
-    let q = usize::from(rotation % 4);
-    let flip = |d: Direction| match d {
-        PosX => NegX,
-        NegX => PosX,
-        PosY => NegY,
-        NegY => PosY,
+    // One quarter turn counterclockwise.
+    let turn = |d: Direction| match d {
+        NegY => PosX,
+        PosX => PosY,
+        PosY => NegX,
+        NegX => NegY,
     };
-    match side {
-        ItemSide::Front => front[q],
-        ItemSide::Back => flip(front[q]),
-        ItemSide::Left => left[q],
-        ItemSide::Right => flip(left[q]),
-    }
+    let unrotated = match side {
+        ItemSide::Front => NegY,
+        ItemSide::Back => PosY,
+        ItemSide::Left => NegX,
+        ItemSide::Right => PosX,
+    };
+    (0..rotation % 4).fold(unrotated, |d, _| turn(d))
 }
 
 fn occurrence(
