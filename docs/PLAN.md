@@ -302,6 +302,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: the wall-length invariant in `validate` computes the along and across offsets between a wall's nodes with checked i64 subtraction, and a difference that does not fit returns `GeometryError::Overflow` instead of panicking or wrapping, as the rest of the function already does.
 - Done when: a validity test with node coordinates at the i64 limits (along and across) gets `Err(GeometryError::Overflow)` in debug and release builds, with no violation computed from a wrapped value; the existing wall-length tests still pass.
 
+**T-193 A torn log line does not brick the project.** Spec 8.4; Q-47, Q-73; REVIEW-1 H-3. Depends on T-192.
+
+- Build: `store::open` reads log.jsonl as bytes and replays only the part up to and including its last newline; a final segment with no trailing newline is an uncommitted append and is ignored, whatever bytes it holds. The project remembers the committed length, and `append` truncates the file to it before writing the next line, then flushes as before. A newline-terminated line that does not parse is still CORRUPT_PROJECT, and subcommands that do not commit never write the log.
+- Done when: tests on disk show that a log ending in a torn line (a partial entry, and a cut inside a multibyte UTF-8 character) opens with every complete entry replayed, that a read-only subcommand leaves the file byte-identical, that the next commit replaces the torn tail so the log holds only complete lines and replays to the same document as an untorn log, and that a bad newline-terminated line is still CORRUPT_PROJECT.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.

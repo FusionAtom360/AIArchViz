@@ -63,6 +63,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **G-3:** the owner's overlay check was on the shop, not the L-room fiducials.
 
 ### H-3: A torn log line makes the project unopenable
+- **Status: open**, planned as T-193 (Q-73 (a)).
 - **Where:**
   - `crates/cli/src/store.rs:102`: `append` writes the line in place, with no temp file and rename and no length or checksum framing.
   - `crates/cli/src/store.rs:80`: `open` fails on any bad line.

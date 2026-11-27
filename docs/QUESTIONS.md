@@ -513,3 +513,12 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   - (c) As (a), but also check the DXF fiducials by hand in AutoCAD 2018 (ID command on each point) at a repeat of G-3. This adds an owner step and checks nothing the T-191 read-back test does not.
 - Recommendation: (a). It meets the exit criteria as written, needs no change to the spec, and keeps the DXF check automated. G-4 can run before or after T-191, because T-191 does not change the GLB. Running it after means only one regenerated slice to check.
 - Answer: (a) (owner, 2026-11-27). T-191 added to docs/PLAN.md.
+
+## Q-73: How to close REVIEW-1 H-3, a torn log line (status: answered)
+- Context: Q-47 (a) has each commit append one line to log.jsonl and flush it before answering. A crash or power loss during that append can leave a partial last line, and `open` then fails with CORRUPT_PROJECT on every subcommand, with no way to recover the good entries (REVIEW-1 H-3). Spec 8.4: "Commit is atomic."
+- Options:
+  - (a) Keep Q-47's append and flush. A commit is answered only after its whole line, ending in a newline, is flushed, so a final segment with no trailing newline was never committed. `open` ignores that segment (it may be any bytes, including invalid UTF-8), and the next append truncates the log back to its last newline before writing. A newline-terminated line that does not parse is still CORRUPT_PROJECT. Read-only subcommands never write the file.
+  - (b) Each commit writes the whole log to a temporary file, syncs it and renames it over log.jsonl, so the file is always the old log or the new one. `open` stays strict. Each commit costs the size of the log, and a project already torn stays unopenable.
+  - (c) Both (a) and (b).
+- Recommendation: (a). It keeps the Q-47 layout and cost, matches what "committed" already means (the answer comes only after the newline is flushed), and recovers projects torn before the fix.
+- Answer: (a) (owner, 2026-11-27). T-193 added to docs/PLAN.md.
