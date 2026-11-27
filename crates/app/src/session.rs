@@ -42,6 +42,31 @@ pub struct View {
     pub walls: Vec<String>,
 }
 
+/// A proposal made through the command API, waiting for the user to confirm
+/// or discard it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pending {
+    /// The action as sent, which a commit sends again.
+    pub action: serde_json::Value,
+    /// The proposal as the command API returned it.
+    pub result: serde_json::Value,
+}
+
+impl Pending {
+    /// The echo text the user confirms (9.4).
+    pub fn echo(&self) -> Vec<String> {
+        self.result["echo"]
+            .as_array()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|l| l.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 /// An open project. Fields drop in order: the server stops (removing
 /// host.json) before the project closes and releases its lock.
 pub struct Session {
@@ -129,30 +154,62 @@ impl Session {
         self.lock().project.history.document().clone()
     }
 
-    /// Proposes `action` through the command API (`propose`, which stores
-    /// nothing) and returns the proposal, or the error message.
-    pub fn propose(&self, action: Action) -> Result<serde_json::Value, String> {
+    /// A fresh (command id, idempotency key) pair.
+    pub fn ids(&self) -> (Uuid, Uuid) {
         let mut shared = self.lock();
-        let command = Command {
-            id: shared.host.new_uuid(),
-            idempotency_key: shared.host.new_uuid(),
-            action,
-        };
-        let request = serde_json::json!({
-            "action": ProposedAction::Commands { commands: vec![command] },
-        });
-        let args = ["propose".to_string(), self.dir.display().to_string()];
+        (shared.host.new_uuid(), shared.host.new_uuid())
+    }
+
+    /// Runs one command API request on the hosted project and returns its
+    /// result, or the error message.
+    fn request(&self, sub: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let mut shared = self.lock();
+        let args = [sub.to_string(), self.dir.display().to_string()];
         let Shared { project, host } = &mut *shared;
-        let (out, _) = run_on(project, &args, &request.to_string(), host.as_mut());
+        let (out, _) = run_on(project, &args, &body.to_string(), host.as_mut());
         let response: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
         if response["ok"] == serde_json::Value::Bool(true) {
             Ok(response["result"].clone())
         } else {
             Err(response["error"]["message"]
                 .as_str()
-                .unwrap_or("the proposal failed")
+                .unwrap_or("the request failed")
                 .to_string())
         }
+    }
+
+    /// Proposes `action` as one command (see `propose_commands`).
+    pub fn propose(&self, action: Action) -> Result<Pending, String> {
+        let (id, idempotency_key) = self.ids();
+        self.propose_commands(vec![Command {
+            id,
+            idempotency_key,
+            action,
+        }])
+    }
+
+    /// Proposes `commands` as one transaction through the command API
+    /// (`propose`, which stores nothing).
+    pub fn propose_commands(&self, commands: Vec<Command>) -> Result<Pending, String> {
+        let action = serde_json::to_value(ProposedAction::Commands { commands })
+            .map_err(|e| e.to_string())?;
+        let result = self.request("propose", &serde_json::json!({ "action": action }))?;
+        Ok(Pending { action, result })
+    }
+
+    /// Commits `pending` through the command API (`commit`) once the user
+    /// has confirmed its echo (DEC-10), and returns the new version. Fails,
+    /// committing nothing, if the project changed since it was proposed or
+    /// the proposal is blocked.
+    pub fn commit(&self, pending: &Pending) -> Result<u64, String> {
+        let request = serde_json::json!({
+            "proposal_id": pending.result["proposal_id"],
+            "base_version": pending.result["base_version"],
+            "action": pending.action,
+            "actor": "user",
+        });
+        self.request("commit", &request)?;
+        Ok(self.version())
     }
 
     /// "Save a copy as": the project's genesis and committed log, written
@@ -313,7 +370,10 @@ mod plan_tests {
             .update(&scene, v.to_world(release), v.nm(8.0))
             .unwrap_or_else(|| panic!());
         let action = preview.action.unwrap_or_else(|| panic!("the wall moved"));
-        let proposal = session.propose(action).unwrap_or_else(|e| panic!("{e}"));
+        let proposal = session
+            .propose(action)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .result;
         let command = &proposal["action"]["commands"][0];
         assert_eq!(command["kind"], "move_wall", "{proposal}");
         let target = command["args"]["motion"]["target"]
@@ -327,5 +387,168 @@ mod plan_tests {
             "{echo}"
         );
         assert_eq!(session.version(), version, "proposing commits nothing");
+    }
+}
+
+#[cfg(test)]
+mod draw_tests {
+    use super::Session;
+    use crate::draw::tests::empty_project;
+    use crate::draw::{Click, WallTool, run_commands, setup_actions, storey_for};
+    use crate::scene::Scene;
+    use crate::viewport::{Screen, Viewport};
+    use archviz_core::{Command, DatumGeometry, GRID_NM, JoinType, Length, Source, format_length};
+
+    /// Done when: a user draws a closed rectangle of four walls in the app,
+    /// every node coordinate committed is on the 1/16 in grid (from
+    /// fractional pointer positions), and the walls join as an L at each
+    /// corner (6.1). Each step is what the app does on that input.
+    #[test]
+    fn a_closed_rectangle_drawn_from_fractional_pointers_commits_on_the_grid_with_l_joins() {
+        let (dir, _) = empty_project("draw-rectangle");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(session.version(), 0);
+
+        // First use: one proposal adds the storey and the origin datum, and
+        // commits once its echo is confirmed.
+        let setup = setup_actions(&session.document());
+        assert_eq!(setup.len(), 2);
+        let commands: Vec<Command> = setup
+            .into_iter()
+            .map(|action| {
+                let (id, idempotency_key) = session.ids();
+                Command {
+                    id,
+                    idempotency_key,
+                    action,
+                }
+            })
+            .collect();
+        let pending = session
+            .propose_commands(commands)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pending.echo().len(), 2, "{:?}", pending.echo());
+        assert_eq!(session.version(), 0, "proposing commits nothing");
+        assert_eq!(session.commit(&pending), Ok(1));
+        let doc = session.document();
+        assert!(setup_actions(&doc).is_empty(), "set up once");
+        assert!(doc.datums.values().any(|d| d.geometry
+            == DatumGeometry::Point {
+                x: Length::from_nanometers(0),
+                y: Length::from_nanometers(0)
+            }));
+
+        // Draw at an awkward zoom, clicking at fractional screen positions
+        // that sit between grid values.
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let mut v = Viewport::new((0, 0), 1.0 / 25_400_000.0, Screen { x: 640.0, y: 400.0 });
+        v.zoom_about(Screen { x: 611.3, y: 377.9 }, 0.173);
+        let px = v.scale() * 304_800_000.0; // pixels per foot
+        let o = v.to_screen((0, 0));
+        let clicks = [
+            (o.x + 0.37, o.y - 0.41),
+            (o.x + 12.0 * px + 0.29, o.y + 0.83),
+            (o.x + 12.0 * px - 0.61, o.y - 10.0 * px + 0.17),
+            (o.x - 0.77, o.y - 10.0 * px - 0.53),
+            (o.x + 0.45, o.y + 0.31),
+        ];
+        let tolerance = v.nm(8.0);
+        let mut tool = WallTool::new();
+        let mut run = None;
+        for (i, (x, y)) in clicks.into_iter().enumerate() {
+            let at = v.to_world(Screen { x, y });
+            assert!(
+                at.0 % GRID_NM != 0 || at.1 % GRID_NM != 0,
+                "click {i} is off the grid"
+            );
+            match tool.click(&scene, at, tolerance) {
+                Click::Added => assert!(i < 4),
+                Click::Closed(r) => run = Some(r),
+                Click::Ignored(why) => panic!("click {i}: {why}"),
+            }
+        }
+        let run = run.unwrap_or_else(|| panic!("the last click closes the run"));
+        let storey = storey_for(&doc).unwrap_or_else(|| panic!("a storey"));
+        let commands =
+            run_commands(&run, storey, || session.ids()).unwrap_or_else(|| panic!("aligned"));
+        let pending = session
+            .propose_commands(commands)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let echo = pending.echo();
+        assert_eq!(echo.len(), 8, "{echo:?}");
+        assert_eq!(session.version(), 1, "nothing commits before confirmation");
+        assert_eq!(session.commit(&pending), Ok(2));
+
+        let doc = session.document();
+        assert_eq!(doc.walls.len(), 4);
+        assert_eq!(doc.nodes.len(), 4);
+        // A rectangle: two x values and two y values, the near corner on the
+        // origin datum (snapped to it) and the far one within a pixel of
+        // where the user clicked (at this zoom a pixel is about 6 in).
+        let xs: std::collections::BTreeSet<i64> =
+            doc.nodes.values().map(|n| n.x.nanometers()).collect();
+        let ys: std::collections::BTreeSet<i64> =
+            doc.nodes.values().map(|n| n.y.nanometers()).collect();
+        let (xs, ys): (Vec<i64>, Vec<i64>) = (xs.into_iter().collect(), ys.into_iter().collect());
+        assert_eq!((xs.len(), ys.len()), (2, 2), "{xs:?} {ys:?}");
+        assert_eq!((xs[0], ys[0]), (0, 0));
+        let pixel = v.nm(1.0);
+        assert!(
+            (xs[1] - 12 * 304_800_000).abs() <= pixel,
+            "{}",
+            format_length(Length::from_nanometers(xs[1]))
+        );
+        assert!(
+            (ys[1] - 10 * 304_800_000).abs() <= pixel,
+            "{}",
+            format_length(Length::from_nanometers(ys[1]))
+        );
+        for n in doc.nodes.values() {
+            assert_eq!(n.x.nanometers() % GRID_NM, 0, "{n:?}");
+            assert_eq!(n.y.nanometers() % GRID_NM, 0, "{n:?}");
+            assert_eq!(n.join, JoinType::L, "{n:?}");
+        }
+        for w in doc.walls.values() {
+            assert_eq!(w.left_extent.source, Source::Proposed);
+            let set = doc
+                .layer_sets
+                .get(&w.layer_set)
+                .unwrap_or_else(|| panic!("layer set"));
+            assert_eq!(set.layers.len(), 3);
+            assert!(
+                set.layers
+                    .iter()
+                    .all(|l| l.thickness.source == Source::Proposed)
+            );
+        }
+        // The committed document draws.
+        assert_eq!(Scene::build(&doc).map(|s| s.walls.len()), Ok(4));
+    }
+
+    #[test]
+    fn a_discarded_or_stale_proposal_commits_nothing() {
+        let (dir, _) = empty_project("draw-stale");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        let doc = session.document();
+        let setup = |s: &Session| {
+            let commands: Vec<Command> = setup_actions(&doc)
+                .into_iter()
+                .map(|action| {
+                    let (id, idempotency_key) = s.ids();
+                    Command {
+                        id,
+                        idempotency_key,
+                        action,
+                    }
+                })
+                .collect();
+            s.propose_commands(commands)
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let first = setup(&session);
+        let second = setup(&session);
+        assert_eq!(session.commit(&first), Ok(1));
+        assert!(session.commit(&second).is_err(), "proposed at version 0");
+        assert_eq!(session.version(), 1);
     }
 }

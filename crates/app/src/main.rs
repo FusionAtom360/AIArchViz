@@ -10,8 +10,13 @@
 //! an entity into a move command snapped to the 1/16 in grid (3.1). A drag
 //! is proposed through the command API and its echo shown; reviewing and
 //! committing proposals is T-204.
+//!
+//! T-202b adds the wall tool (draw.rs). Each drawn run, and on first use the
+//! storey and origin datum, is proposed through the command API, its echo
+//! shown, and committed only when the user confirms it (DEC-10).
 
 mod drag;
+mod draw;
 mod plan_view;
 mod scene;
 mod session;
@@ -24,7 +29,7 @@ use std::sync::Arc;
 use eframe::egui;
 use plan_view::{Event, PlanView};
 use scene::{Entity, Scene};
-use session::{Session, View};
+use session::{Pending, Session, View};
 
 /// Fonts installed with Windows; the first one found is used. No font ships
 /// with the app (DEC-12).
@@ -67,6 +72,8 @@ struct App {
     plan: PlanView,
     /// The echo of the last proposed drag, or why it failed.
     proposal: Vec<String>,
+    /// A proposal waiting for the user to confirm its echo, and what it is.
+    pending: Option<(String, Pending)>,
 }
 
 impl App {
@@ -82,6 +89,7 @@ impl App {
             scene: None,
             plan: PlanView::new(),
             proposal: Vec::new(),
+            pending: None,
         }
     }
 
@@ -91,6 +99,96 @@ impl App {
         self.scene = None;
         self.plan = PlanView::new();
         self.proposal.clear();
+        self.pending = None;
+    }
+
+    /// Proposes `commands`; on success it waits for confirmation.
+    fn propose(&mut self, what: &str, commands: Vec<archviz_core::Command>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        match session.propose_commands(commands) {
+            Ok(pending) => self.pending = Some((what.to_string(), pending)),
+            Err(e) => self.message = format!("{what}: {e}"),
+        }
+    }
+
+    /// Turns wall mode on or off. On first use in a project without a
+    /// storey or datum, proposes them (one proposal).
+    fn toggle_walls(&mut self) {
+        if self.plan.walls.take().is_some() {
+            return;
+        }
+        self.plan.walls = Some(draw::WallTool::new());
+        let Some(session) = &self.session else {
+            return;
+        };
+        let setup = draw::setup_actions(&session.document());
+        if setup.is_empty() {
+            return;
+        }
+        let commands = setup
+            .into_iter()
+            .map(|action| {
+                let (id, idempotency_key) = session.ids();
+                archviz_core::Command {
+                    id,
+                    idempotency_key,
+                    action,
+                }
+            })
+            .collect();
+        self.propose("Storey and origin datum", commands);
+    }
+
+    /// Proposes a drawn run of walls.
+    fn propose_run(&mut self, run: &draw::Run) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let Some(storey) = draw::storey_for(&session.document()) else {
+            self.message = "Confirm the storey and origin datum before drawing walls.".to_string();
+            return;
+        };
+        match draw::run_commands(run, storey, || session.ids()) {
+            Some(commands) => self.propose("Walls", commands),
+            None => self.message = "Walls must be horizontal or vertical.".to_string(),
+        }
+    }
+
+    /// The proposal waiting for confirmation: its echo, Confirm and Discard.
+    fn confirm(&mut self, ui: &mut egui::Ui) {
+        let Some((what, pending)) = &self.pending else {
+            return;
+        };
+        ui.separator();
+        ui.strong(format!("{what}: proposed, not yet committed"));
+        for line in pending.echo() {
+            ui.label(line);
+        }
+        let mut done = None;
+        ui.horizontal(|ui| {
+            if ui.button("Confirm").clicked() {
+                done = Some(true);
+            }
+            if ui.button("Discard").clicked() {
+                done = Some(false);
+            }
+        });
+        match (done, &self.session) {
+            (Some(true), Some(session)) => {
+                self.message = match session.commit(pending) {
+                    Ok(version) => format!("{what}: committed as version {version}."),
+                    Err(e) => format!("{what}: not committed: {e}"),
+                };
+                self.pending = None;
+            }
+            (Some(_), _) => {
+                self.message = format!("{what}: discarded.");
+                self.pending = None;
+            }
+            (None, _) => {}
+        }
     }
 
     fn opened(&mut self, result: Result<Session, archviz_cli::CliError>) {
@@ -197,6 +295,7 @@ impl App {
             "Selection: {}",
             describe(&self.scene, self.plan.selected)
         ));
+        self.confirm(ui);
         if !self.proposal.is_empty() {
             ui.separator();
             ui.label("Last drag, proposed and not committed (review is T-204):");
@@ -223,19 +322,16 @@ impl App {
             }
             None => return,
         };
-        if let Event::Move(action) = self.plan.show(ui, scene) {
-            self.proposal = match session.propose(*action) {
-                Ok(result) => result["echo"]
-                    .as_array()
-                    .map(|lines| {
-                        lines
-                            .iter()
-                            .filter_map(|l| l.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                Err(e) => vec![e],
-            };
+        match self.plan.show(ui, scene) {
+            Event::None => {}
+            Event::Move(action) => {
+                self.proposal = match session.propose(*action) {
+                    Ok(pending) => pending.echo(),
+                    Err(e) => vec![e],
+                };
+            }
+            Event::Run(run) => self.propose_run(&run),
+            Event::Refused(why) => self.message = format!("Point not placed: {why}."),
         }
     }
 }
@@ -273,6 +369,16 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 if ui.button("Fit").clicked() {
                     self.plan.fit();
+                }
+                let drawing = self.plan.walls.is_some();
+                if ui
+                    .add_enabled(
+                        self.session.is_some(),
+                        egui::Button::selectable(drawing, "Draw walls"),
+                    )
+                    .clicked()
+                {
+                    self.toggle_walls();
                 }
                 ui.label(self.plan.status());
             });

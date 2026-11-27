@@ -1,7 +1,8 @@
 //! The plan view widget (T-202, spec 3.1, 5.3): draws the scene through the
 //! 64-bit viewport, pans (middle or right drag), zooms about the pointer
 //! (scroll), selects (click) and drags entities into move commands (left
-//! drag). Floats appear only between the viewport and the painter; every
+//! drag), and in wall mode draws runs of walls from snapped clicks
+//! (T-202b, draw.rs). Floats appear only between the viewport and the painter; every
 //! value that leaves this widget as a command argument is snapped first.
 
 use archviz_core::{Axis, DatumGeometry, Function, Length, format_length};
@@ -10,6 +11,7 @@ use eframe::egui::{
 };
 
 use crate::drag::{Drag, Preview};
+use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
 use crate::snap::{SnapKind, to_grid};
 use crate::viewport::{Screen, Viewport, World, clip_polygon, clip_segment};
@@ -44,6 +46,10 @@ pub enum Event {
     None,
     /// A drag ended with a move; the app proposes it.
     Move(Box<archviz_core::Action>),
+    /// A run of walls was closed or finished; the app proposes it.
+    Run(Run),
+    /// A click in wall mode was refused, and why.
+    Refused(&'static str),
 }
 
 pub struct PlanView {
@@ -53,6 +59,10 @@ pub struct PlanView {
     preview: Option<Preview>,
     /// The snapped pointer position, for the status line.
     pointer: Option<World>,
+    /// Wall mode: the run being drawn. None in select mode.
+    pub walls: Option<WallTool>,
+    /// In wall mode, where a click would place the next point.
+    next: Option<World>,
 }
 
 fn pos(s: Screen) -> Pos2 {
@@ -78,6 +88,8 @@ impl PlanView {
             drag: None,
             preview: None,
             pointer: None,
+            walls: None,
+            next: None,
         }
     }
 
@@ -105,6 +117,20 @@ impl PlanView {
                 length(p.delta),
                 length(p.snap.value)
             ));
+        }
+        if let (Some(tool), Some(next)) = (&self.walls, self.next) {
+            s = format!("next point x {}  y {}", length(next.0), length(next.1));
+            if let Some(last) = tool.points().last() {
+                let d = (i128::from(next.0) - i128::from(last.0)).abs()
+                    + (i128::from(next.1) - i128::from(last.1)).abs();
+                s.push_str(&format!(
+                    "   wall {}",
+                    length(i64::try_from(d).unwrap_or(i64::MAX))
+                ));
+            }
+            s.push_str(
+                "   click the first point to close, Enter or double-click to finish, Esc to cancel",
+            );
         }
         if let Some(v) = &self.viewport {
             s.push_str(&format!(
@@ -149,11 +175,61 @@ impl PlanView {
         let viewport = viewport.clone();
         self.pointer = response.hover_pos().map(|p| viewport.to_world(screen(p)));
 
-        // Selection and dragging.
         let mut event = Event::None;
         let at = response
             .interact_pointer_pos()
             .map(|p| viewport.to_world(screen(p)));
+        if let Some(tool) = &mut self.walls {
+            // Wall mode: clicks place points; nothing is selected or dragged.
+            self.drag = None;
+            self.preview = None;
+            let tolerance = viewport.nm(SNAP_PX);
+            if response.clicked_by(PointerButton::Primary)
+                && let Some(at) = at
+            {
+                event = match tool.click(scene, at, tolerance) {
+                    Click::Added => Event::None,
+                    Click::Closed(run) => Event::Run(run),
+                    Click::Ignored(why) => Event::Refused(why),
+                };
+            }
+            let (enter, escape) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if (response.double_clicked_by(PointerButton::Primary) || enter)
+                && let Some(run) = tool.finish()
+            {
+                event = Event::Run(run);
+            }
+            if escape {
+                tool.cancel();
+            }
+            self.next = self.pointer.map(|p| tool.next_point(scene, p, tolerance));
+        } else {
+            self.next = None;
+            event = self.select_and_drag(ui, &response, scene, &viewport, at);
+        }
+
+        let painter = painter.with_clip_rect(rect);
+        let bg = ui.visuals().extreme_bg_color;
+        painter.rect_filled(rect, 0.0, bg);
+        self.paint(&painter, &viewport, scene, rect, ui.visuals().dark_mode, bg);
+        event
+    }
+
+    /// Select mode: click selects, left drag moves.
+    fn select_and_drag(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        scene: &Scene,
+        viewport: &Viewport,
+        at: Option<World>,
+    ) -> Event {
+        let mut event = Event::None;
         if response.clicked_by(PointerButton::Primary) {
             self.selected = at.and_then(|w| scene.pick(w, viewport.nm(PICK_PX)));
         }
@@ -177,11 +253,6 @@ impl PlanView {
             }
             self.drag = None;
         }
-
-        let painter = painter.with_clip_rect(rect);
-        let bg = ui.visuals().extreme_bg_color;
-        painter.rect_filled(rect, 0.0, bg);
-        self.paint(&painter, &viewport, scene, rect, ui.visuals().dark_mode, bg);
         event
     }
 
@@ -397,6 +468,24 @@ impl PlanView {
                     6.0,
                     4.0,
                 ));
+            }
+        }
+        // Wall mode: the run so far, the next segment and the next point.
+        if let Some(tool) = &self.walls {
+            let mut run: Vec<World> = tool.points().to_vec();
+            run.extend(self.next);
+            for w in run.windows(2) {
+                if let [a, b] = w
+                    && let Some((p, q)) = clip_segment(v.to_screen(*a), v.to_screen(*b), lo, hi)
+                {
+                    painter.line_segment([pos(p), pos(q)], Stroke::new(2.0, accent));
+                }
+            }
+            for p in &run {
+                let s = v.to_screen(*p);
+                if clip_segment(s, s, lo, hi).is_some() {
+                    painter.circle_stroke(pos(s), 4.0, Stroke::new(1.5, accent));
+                }
             }
         }
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, faint), StrokeKind::Inside);
