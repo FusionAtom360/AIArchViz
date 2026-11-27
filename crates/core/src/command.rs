@@ -5,7 +5,8 @@
 //! "command", ordinal)`, ordinals counting from 0 within the command.
 //!
 //! T-105 implements the commands that are pure data edits (Q-9): CreateNode,
-//! SetStorey, SetVariantSelection and SetProjectUnits. Every other v1
+//! SetStorey, SetVariantSelection and SetProjectUnits; T-108 adds
+//! CreateOpening (Q-23). Every other v1
 //! command parses with empty `args` and returns
 //! [`CommandError::NotYetImplemented`]; its arguments are defined by the task
 //! that implements it.
@@ -15,9 +16,12 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use crate::document::{Document, JoinType, Node, Sourced, Storey};
+use crate::document::{
+    Document, JoinType, Node, Opening, OpeningEdge, OpeningKind, Reference, Source, Sourced, Storey,
+};
 use crate::identity::Uuid;
 use crate::length::Length;
+use crate::solver::{LayerA, SolveError, Solver};
 use crate::units::ProjectUnit;
 
 /// One command.
@@ -60,6 +64,21 @@ pub struct SetVariantSelection {
     pub selected: Uuid,
 }
 
+/// Creates an opening, door or window in a host wall (Q-23). Null sizes take
+/// the defaults catalog value with source Proposed (6.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateOpening {
+    pub kind: OpeningKind,
+    pub host: Uuid,
+    pub reference: Reference,
+    pub anchor: OpeningEdge,
+    pub offset: Sourced<Length>,
+    pub width: Option<Sourced<Length>>,
+    pub height: Option<Sourced<Length>>,
+    pub sill: Option<Sourced<Length>>,
+}
+
 /// Sets the unit of bare numbers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,7 +101,7 @@ pub enum Action {
     MergeWalls(NoArgs),
     SetWallLayers(NoArgs),
     MoveWall(NoArgs),
-    CreateOpening(NoArgs),
+    CreateOpening(CreateOpening),
     MoveOpening(NoArgs),
     PlaceOccurrence(NoArgs),
     MoveOccurrence(NoArgs),
@@ -176,6 +195,8 @@ pub enum CommandError {
     IdCollision(Uuid),
     /// The selected option is not one of the slot's options.
     InvalidOption { slot: Uuid, option: Uuid },
+    /// The document could not be solved after the command.
+    Solve(SolveError),
 }
 
 impl fmt::Display for CommandError {
@@ -184,6 +205,7 @@ impl fmt::Display for CommandError {
             CommandError::NotYetImplemented(kind) => write!(f, "{kind} is not implemented yet"),
             CommandError::UnknownEntity(id) => write!(f, "no entity {id}"),
             CommandError::IdCollision(id) => write!(f, "new id {id} already exists"),
+            CommandError::Solve(e) => write!(f, "cannot solve: {e}"),
             CommandError::InvalidOption { slot, option } => {
                 write!(f, "{option} is not an option of variant slot {slot}")
             }
@@ -250,6 +272,42 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
             slot.selected = args.selected;
         }
         Action::SetProjectUnits(args) => doc.project.default_unit = args.default_unit,
+        Action::CreateOpening(args) => {
+            if !doc.walls.contains_key(&args.host) {
+                return Err(CommandError::UnknownEntity(args.host));
+            }
+            let id = new_id(0);
+            if doc.openings.contains_key(&id) {
+                return Err(CommandError::IdCollision(id));
+            }
+            let defaults = crate::defaults::opening_size(args.kind);
+            let or_default = |given: &Option<Sourced<Length>>, default: Length| {
+                given.clone().unwrap_or(Sourced {
+                    value: default,
+                    source: Source::Proposed,
+                })
+            };
+            doc.openings.insert(
+                id,
+                Opening {
+                    kind: args.kind,
+                    host: args.host,
+                    reference: args.reference,
+                    anchor: args.anchor,
+                    offset: args.offset.clone(),
+                    width: or_default(&args.width, defaults.width),
+                    height: or_default(&args.height, defaults.height),
+                    sill: or_default(&args.sill, defaults.sill),
+                    start: Length::from_nanometers(0),
+                },
+            );
+            // Place it: solve and store the new opening's start (Q-20).
+            let solution = LayerA::default().solve(&doc).map_err(CommandError::Solve)?;
+            if let (Some(start), Some(o)) = (solution.openings.get(&id), doc.openings.get_mut(&id))
+            {
+                o.start = *start;
+            }
+        }
         other => return Err(CommandError::NotYetImplemented(other.kind())),
     }
     Ok(doc)
@@ -408,6 +466,160 @@ pub(crate) mod tests {
         );
     }
 
+    /// A document with one storey and a solved +X wall from (0,0) to (20 ft, 0).
+    pub(crate) fn with_wall() -> (Document, Uuid, Uuid) {
+        use crate::document::{
+            Axis, Constraint, ConstraintKind, ConstraintStatus, Direction, Function, Layer,
+            LayerSet, Wall, WallTop,
+        };
+        let mut doc = genesis();
+        let ft = |n: i64| Length::from_nanometers(n * 304_800_000);
+        let (a, b, wall, storey, layers) = (uid(20), uid(21), uid(22), uid(23), uid(24));
+        doc.storeys.insert(
+            storey,
+            Storey {
+                name: "Ground".into(),
+                elevation: sourced(0),
+                floor_to_floor: sourced(3_048_000_000),
+                default_ceiling_height: sourced(2_743_200_000),
+            },
+        );
+        doc.nodes.insert(
+            a,
+            Node {
+                x: ft(0),
+                y: ft(0),
+                join: JoinType::FreeEnd,
+            },
+        );
+        doc.nodes.insert(
+            b,
+            Node {
+                x: ft(20),
+                y: ft(0),
+                join: JoinType::FreeEnd,
+            },
+        );
+        doc.layer_sets.insert(
+            layers,
+            LayerSet {
+                name: "Stud".into(),
+                layers: vec![Layer {
+                    material: uid(25),
+                    thickness: sourced(114_300_000),
+                    core: true,
+                }],
+            },
+        );
+        let mut labels = crate::identity::LabelAllocator::new();
+        doc.walls.insert(
+            wall,
+            Wall {
+                label: labels.allocate("W").unwrap_or_else(|_| unreachable!()),
+                storey,
+                node_a: a,
+                node_b: b,
+                direction: Direction::PosX,
+                layer_set: layers,
+                left_extent: sourced(57_150_000),
+                base_offset: sourced(0),
+                top: WallTop::Storey,
+                join_priority: 0,
+                function: Function::New,
+            },
+        );
+        for (n, node, axis, value) in [
+            (26, a, Axis::X, ft(0)),
+            (27, a, Axis::Y, ft(0)),
+            (28, b, Axis::X, ft(20)),
+        ] {
+            doc.constraints.insert(
+                uid(n),
+                Constraint {
+                    kind: ConstraintKind::Fixed {
+                        reference: Reference::Node { node },
+                        axis,
+                        value,
+                    },
+                    status: ConstraintStatus::Driving,
+                    source: Source::UserStated,
+                    provenance: None,
+                },
+            );
+        }
+        (doc, wall, a)
+    }
+
+    fn create_opening(kind: OpeningKind, host: Uuid, from: Uuid, sizes: Option<i64>) -> Action {
+        Action::CreateOpening(CreateOpening {
+            kind,
+            host,
+            reference: Reference::Node { node: from },
+            anchor: OpeningEdge::Start,
+            offset: sourced(1_219_200_000),
+            width: sizes.map(sourced),
+            height: sizes.map(sourced),
+            sill: sizes.map(|_| sourced(0)),
+        })
+    }
+
+    #[test]
+    fn create_opening_applies_proposed_defaults() -> Result<(), CommandError> {
+        let (doc, wall, a) = with_wall();
+        let c = cmd(1, create_opening(OpeningKind::Window, wall, a, None));
+        let id = Uuid::derive(c.idempotency_key, "command", "0");
+        let doc = apply(&doc, &c)?;
+        let o = doc.openings.get(&id).cloned();
+        let defaults = crate::defaults::opening_size(OpeningKind::Window);
+        let proposed = |value| Sourced {
+            value,
+            source: Source::Proposed,
+        };
+        assert_eq!(
+            o.as_ref().map(|o| o.width.clone()),
+            Some(proposed(defaults.width))
+        );
+        assert_eq!(
+            o.as_ref().map(|o| o.height.clone()),
+            Some(proposed(defaults.height))
+        );
+        assert_eq!(
+            o.as_ref().map(|o| o.sill.clone()),
+            Some(proposed(defaults.sill))
+        );
+        // Placed and solved: start is 4 ft from the wall's start node.
+        assert_eq!(
+            o.map(|o| o.start),
+            Some(Length::from_nanometers(1_219_200_000))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn create_opening_keeps_stated_sizes_and_checks_the_host() -> Result<(), CommandError> {
+        let (doc, wall, a) = with_wall();
+        let c = cmd(
+            1,
+            create_opening(OpeningKind::Door, wall, a, Some(762_000_000)),
+        );
+        let id = Uuid::derive(c.idempotency_key, "command", "0");
+        let after = apply(&doc, &c)?;
+        let o = after.openings.get(&id).cloned();
+        assert_eq!(
+            o.as_ref().map(|o| o.width.clone()),
+            Some(sourced(762_000_000))
+        );
+        assert_eq!(o.map(|o| (o.kind, o.host)), Some((OpeningKind::Door, wall)));
+        assert_eq!(
+            apply(
+                &doc,
+                &cmd(2, create_opening(OpeningKind::Door, uid(99), a, None))
+            ),
+            Err(CommandError::UnknownEntity(uid(99)))
+        );
+        Ok(())
+    }
+
     fn unimplemented_actions() -> Vec<Action> {
         let n = || NoArgs {};
         vec![
@@ -416,7 +628,6 @@ pub(crate) mod tests {
             Action::MergeWalls(n()),
             Action::SetWallLayers(n()),
             Action::MoveWall(n()),
-            Action::CreateOpening(n()),
             Action::MoveOpening(n()),
             Action::PlaceOccurrence(n()),
             Action::MoveOccurrence(n()),
@@ -433,7 +644,7 @@ pub(crate) mod tests {
     #[test]
     fn the_rest_of_the_v1_set_is_not_yet_implemented() {
         let actions = unimplemented_actions();
-        assert_eq!(actions.len() + 4, 20, "8.2 lists 20 commands");
+        assert_eq!(actions.len() + 5, 20, "8.2 lists 20 commands");
         for action in actions {
             let kind = action.kind();
             assert_eq!(

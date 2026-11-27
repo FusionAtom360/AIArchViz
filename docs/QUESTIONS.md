@@ -148,3 +148,27 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) two collinear walls at a node meet with square ends at the node (a new join type `straight`, schema change); two walls leaving a node in the same direction, or more than four walls, are an error naming the node; footprints and layer polygons are computed on demand by a pure function, never stored; join types are stored on nodes; polygons are listed counterclockwise from the vertex with the lowest x, then lowest y; layers are listed left to right; (b) the same, but footprints stored in the document.
 - Recommendation: (a). Footprints are cheap to recompute from nodes and layer sets, and storing them would put large derived data in every diff.
 - Answer: (a) as listed: straight join type, errors, polygons computed on demand (owner, 2026-11-26).
+
+## Q-20: How an opening is placed and solved (T-108, status: answered)
+- Context: 6 gives an opening "host wall, along-wall reference and offset, width, height, sill"; T-104 added `anchor` (which opening edge sits at the offset). The sign of the offset, which edge is "start", which references are allowed, and where the solved position lives are not stated. Q-16 left OpeningEdge references for T-108.
+- Options: (a) along coordinates run in the host's direction (node_a to node_b); the Start edge is the one nearer node_a; the anchor edge lies at coordinate(reference) + offset, measured in the host's direction; any reference with a coordinate on the host's along axis is allowed (nodes, datums, faces or centers of perpendicular walls, other openings' edges); the solver gives each opening one variable on that axis, so OpeningEdge references solve like any other; the solved start-edge coordinate is stored on the Opening as a derived field `start` (Q-7), written by apply_to; a clash involving a placement names the opening's id in the Conflict; (b) the same but the position is computed on demand and not stored.
+- Recommendation: (a). It follows Q-7 and lets validation and export read positions without re-solving.
+- Answer: (a) as listed, with the derived `start` stored on Opening (owner, 2026-11-26).
+
+## Q-21: Default opening sizes and minimum jamb distance (T-108, status: answered)
+- Context: 6.4 requires versioned defaults, always Proposed, and calls the examples "illustrative, to be confirmed". 7.7 requires a minimum jamb distance from the wall ends, "default Proposed". These numbers are the owner's.
+- Options: (a) defaults catalog v1: door 3'-0" wide, 6'-8" high, sill 0"; window 3'-0" wide, 4'-0" high, sill 3'-0"; plain opening 3'-0" wide, 6'-8" high, sill 0"; minimum jamb distance 4"; (b) other values you give.
+- Recommendation: (a): common US residential and light-commercial sizes, with 4" leaving room for king and jack studs at a corner. All are Proposed, so the user confirms each one.
+- Answer: (a) door 3'-0" x 6'-8" sill 0; window 3'-0" x 4'-0" sill 3'-0"; opening 3'-0" x 6'-8" sill 0; minimum jamb distance 4" (owner, 2026-11-26).
+
+## Q-22: The host profile, the void and "inside the host" (T-108, status: answered)
+- Context: T-108 asks for "the void cut in the host profile" and sill and head heights; 7.7 requires every opening to lie fully inside its host with the minimum jamb distance from the wall ends.
+- Options: (a) the host profile is the wall's elevation: along the wall from its start cut to its end cut, and up from its base (storey elevation + base_offset) to its top (storey elevation + floor_to_floor, or base + explicit height); each opening voids a rectangle from its start to end edge and from sill to head (head = sill + height), with sill measured from the storey elevation; "inside" means the opening's along span lies within the stretch where the wall has its full thickness on both faces, shrunk by the minimum jamb distance at each end, and sill and head lie within base and top; violations are typed and returned by a validation function that T-110 will gather with the other 7.7 checks; (b) sill measured from the wall base instead.
+- Recommendation: (a). Sill above finished floor is how sills are specified; using the full-thickness stretch keeps an opening out of a crossing wall at a T and out of a miter at an L.
+- Answer: (a) sill measured from the storey elevation (owner, 2026-11-26).
+
+## Q-23: Implement CreateOpening now (T-108, status: answered)
+- Context: Q-9 left CreateOpening returning NotYetImplemented "until its task"; T-108 asks for default sizes applied as Proposed, which happens at creation. MoveOpening belongs to T-113 (8.7).
+- Options: (a) implement CreateOpening with args {kind, host, reference, anchor, offset, width, height, sill}, where width, height and sill may be null and then take the catalog default with source Proposed; the new id is the command's derived id; it fails if the host is unknown; (b) leave commands to a later task and expose defaults only as a function.
+- Recommendation: (a). It is the one place defaults are applied, and it lets tests create openings the way the app will.
+- Answer: (a) implement CreateOpening (owner, 2026-11-26).

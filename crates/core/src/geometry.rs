@@ -19,11 +19,18 @@
 //!
 //! Polygons are computed on demand, never stored (Q-19). Each is listed
 //! counterclockwise from its vertex with the lowest x, then the lowest y.
+//!
+//! A wall's elevation profile runs along its axis in its direction and up
+//! from its base to its top; each opening voids a rectangle from its start
+//! to its end edge and from its sill (above the storey elevation) to its
+//! head. An opening must lie in the stretch where its host has full
+//! thickness on both faces, the minimum jamb distance from either end, and
+//! between the wall's base and top (7.7, Q-22).
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::document::{Direction, Document, JoinType, Point};
+use crate::document::{Direction, Document, JoinType, Point, WallTop};
 use crate::identity::Uuid;
 use crate::length::Length;
 
@@ -407,6 +414,190 @@ pub fn wall_geometry(document: &Document) -> Result<BTreeMap<Uuid, WallGeometry>
     Ok(out)
 }
 
+/// The void an opening cuts in its host's elevation profile (Q-22).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Void {
+    pub opening: Uuid,
+    /// Start and end edges on the host's along axis (start nearer node_a).
+    pub start: Length,
+    pub end: Length,
+    /// Absolute elevations: storey elevation + sill, and sill + height.
+    pub sill: Length,
+    pub head: Length,
+}
+
+/// A wall's elevation profile: along its axis in its direction, and up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WallProfile {
+    /// The outermost extent of the wall's end cuts, at node_a's and node_b's ends.
+    pub start: Length,
+    pub end: Length,
+    /// The stretch where the wall has its full thickness on both faces.
+    pub full_start: Length,
+    pub full_end: Length,
+    /// Absolute elevations of the wall's base and top.
+    pub base: Length,
+    pub top: Length,
+    /// Ordered along the wall.
+    pub voids: Vec<Void>,
+}
+
+/// What is wrong with an opening's fit in its host (7.7, Q-22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpeningProblem {
+    /// Width or height is zero or negative.
+    NonPositiveSize,
+    /// Closer than the minimum jamb distance to the start of the
+    /// full-thickness stretch; negative clearance means outside it.
+    TooCloseToStart { clearance: Length },
+    /// The same at the end.
+    TooCloseToEnd { clearance: Length },
+    /// The sill is below the wall's base by this much.
+    BelowBase { by: Length },
+    /// The head is above the wall's top by this much.
+    AboveTop { by: Length },
+}
+
+/// One problem with one opening.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpeningViolation {
+    pub opening: Uuid,
+    pub problem: OpeningProblem,
+}
+
+/// Every wall's elevation profile with its openings' voids.
+pub fn wall_profiles(document: &Document) -> Result<BTreeMap<Uuid, WallProfile>, GeometryError> {
+    let walls = walls(document)?;
+    let (_, cuts) = joins(document, &walls)?;
+    let to_len = |v: i128| {
+        i64::try_from(v)
+            .map(Length::from_nanometers)
+            .map_err(|_| GeometryError::Overflow)
+    };
+    let mut out = BTreeMap::new();
+    for (i, w) in walls.iter().enumerate() {
+        let wall = document
+            .walls
+            .get(&w.id)
+            .ok_or(GeometryError::UnknownEntity { id: w.id })?;
+        let storey = document
+            .storeys
+            .get(&wall.storey)
+            .ok_or(GeometryError::UnknownEntity { id: wall.storey })?;
+        let elevation = i128::from(storey.elevation.value.nanometers());
+        let base = elevation + i128::from(wall.base_offset.value.nanometers());
+        let top = match &wall.top {
+            WallTop::Storey => elevation + i128::from(storey.floor_to_floor.value.nanometers()),
+            WallTop::Height { height } => base + i128::from(height.value.nanometers()),
+        };
+        let cut = |end: usize| {
+            cuts.get(&(i, end))
+                .copied()
+                .unwrap_or(Cut::Square(w.ends[end]))
+        };
+        let faces = [w.bounds[0], w.bounds[w.bounds.len() - 1]];
+        let dir = w.frame.dir;
+        // Outermost and innermost of the two faces' cuts, seen along the direction.
+        let span = |c: Cut, toward: i128| {
+            let (p, q) = (c.at(faces[0]), c.at(faces[1]));
+            let (lo, hi) = (p.min(q), p.max(q));
+            if toward > 0 { (hi, lo) } else { (lo, hi) }
+        };
+        let (start, full_start) = span(cut(0), -dir);
+        let (end, full_end) = span(cut(1), dir);
+        let mut voids: Vec<(i128, Void)> = Vec::new();
+        for (id, o) in document.openings.iter().filter(|(_, o)| o.host == w.id) {
+            let s0 = i128::from(o.start.nanometers());
+            let sill = elevation + i128::from(o.sill.value.nanometers());
+            let void = Void {
+                opening: *id,
+                start: o.start,
+                end: to_len(s0 + dir * i128::from(o.width.value.nanometers()))?,
+                sill: to_len(sill)?,
+                head: to_len(sill + i128::from(o.height.value.nanometers()))?,
+            };
+            voids.push((s0 * dir, void));
+        }
+        voids.sort_by_key(|a| (a.0, a.1.opening));
+        out.insert(
+            w.id,
+            WallProfile {
+                start: to_len(start)?,
+                end: to_len(end)?,
+                full_start: to_len(full_start)?,
+                full_end: to_len(full_end)?,
+                base: to_len(base)?,
+                top: to_len(top)?,
+                voids: voids.into_iter().map(|(_, v)| v).collect(),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Every opening that does not lie fully inside its host (7.7, Q-22), in
+/// opening id order.
+pub fn opening_violations(
+    document: &Document,
+    min_jamb: Length,
+) -> Result<Vec<OpeningViolation>, GeometryError> {
+    let profiles = wall_profiles(document)?;
+    let jamb = i128::from(min_jamb.nanometers());
+    let n = |l: Length| i128::from(l.nanometers());
+    let to_len = |v: i128| {
+        i64::try_from(v)
+            .map(Length::from_nanometers)
+            .map_err(|_| GeometryError::Overflow)
+    };
+    let mut out = Vec::new();
+    for (id, o) in &document.openings {
+        let host = document
+            .walls
+            .get(&o.host)
+            .ok_or(GeometryError::UnknownEntity { id: o.host })?;
+        let p = profiles
+            .get(&o.host)
+            .ok_or(GeometryError::UnknownEntity { id: o.host })?;
+        let mut push = |problem| {
+            out.push(OpeningViolation {
+                opening: *id,
+                problem,
+            })
+        };
+        if o.width.value.nanometers() <= 0 || o.height.value.nanometers() <= 0 {
+            push(OpeningProblem::NonPositiveSize);
+            continue;
+        }
+        let Some(v) = p.voids.iter().find(|v| v.opening == *id) else {
+            continue;
+        };
+        let dir = frame(host.direction).dir;
+        let before = (n(v.start) - n(p.full_start)) * dir;
+        if before < jamb {
+            push(OpeningProblem::TooCloseToStart {
+                clearance: to_len(before)?,
+            });
+        }
+        let after = (n(p.full_end) - n(v.end)) * dir;
+        if after < jamb {
+            push(OpeningProblem::TooCloseToEnd {
+                clearance: to_len(after)?,
+            });
+        }
+        if v.sill < p.base {
+            push(OpeningProblem::BelowBase {
+                by: to_len(n(p.base) - n(v.sill))?,
+            });
+        }
+        if v.head > p.top {
+            push(OpeningProblem::AboveTop {
+                by: to_len(n(v.head) - n(p.top))?,
+            });
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +671,15 @@ mod tests {
             Building {
                 id: uid(9, 1),
                 name: "B".into(),
+            },
+        );
+        doc.storeys.insert(
+            uid(8, 0),
+            Storey {
+                name: "Ground".into(),
+                elevation: sourced(0),
+                floor_to_floor: sourced(120 * IN),
+                default_ceiling_height: sourced(108 * IN),
             },
         );
         for &(n, x, y) in nodes {
@@ -806,6 +1006,234 @@ mod tests {
             wall_geometry(&doc),
             Err(GeometryError::BadWall { wall: wall_id(1) })
         );
+    }
+
+    fn opening_id(n: u8) -> Uuid {
+        uid(10, n)
+    }
+
+    /// An opening with its solved start already stored, all sizes in inches.
+    fn put_opening(
+        doc: &mut Document,
+        n: u8,
+        host: u8,
+        start: i64,
+        width: i64,
+        height: i64,
+        sill: i64,
+    ) {
+        doc.openings.insert(
+            opening_id(n),
+            Opening {
+                kind: OpeningKind::Window,
+                host: wall_id(host),
+                reference: Reference::Node { node: node_id(1) },
+                anchor: OpeningEdge::Start,
+                offset: sourced(0),
+                width: sourced(width * IN),
+                height: sourced(height * IN),
+                sill: sourced(sill * IN),
+                start: len(start * IN),
+            },
+        );
+    }
+
+    fn free_wall(direction: Direction) -> Document {
+        let (a, b) = if direction == PosX {
+            (0, 100)
+        } else {
+            (100, 0)
+        };
+        build(
+            &[(1, a, 0), (2, b, 0)],
+            &[(1, spec(1, 2, direction, &[4], 2, 0))],
+        )
+    }
+
+    fn inches(l: Length) -> i64 {
+        l.nanometers() / IN
+    }
+
+    #[test]
+    fn profile_and_voids_of_a_free_wall() -> Result<(), GeometryError> {
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 10, 36, 80, 0);
+        put_opening(&mut doc, 2, 1, 60, 30, 48, 36);
+        let p = wall_profiles(&doc)?.remove(&wall_id(1));
+        let p = p.ok_or(GeometryError::UnknownEntity { id: wall_id(1) })?;
+        assert_eq!(
+            [p.start, p.end, p.full_start, p.full_end, p.base, p.top].map(inches),
+            [0, 100, 0, 100, 0, 120]
+        );
+        let voids: Vec<_> = p
+            .voids
+            .iter()
+            .map(|v| (v.opening, [v.start, v.end, v.sill, v.head].map(inches)))
+            .collect();
+        assert_eq!(
+            voids,
+            vec![
+                (opening_id(1), [10, 46, 0, 80]),
+                (opening_id(2), [60, 90, 36, 84])
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn profile_runs_in_the_wall_direction() -> Result<(), GeometryError> {
+        let mut doc = free_wall(NegX);
+        put_opening(&mut doc, 1, 1, 90, 36, 80, 0);
+        let p = wall_profiles(&doc)?
+            .remove(&wall_id(1))
+            .ok_or(GeometryError::Overflow)?;
+        assert_eq!([p.start, p.end].map(inches), [100, 0]);
+        assert_eq!(
+            p.voids.first().map(|v| [v.start, v.end].map(inches)),
+            Some([90, 54])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn profile_heights_follow_storey_base_and_top() -> Result<(), GeometryError> {
+        let mut doc = free_wall(PosX);
+        if let Some(st) = doc.storeys.get_mut(&uid(8, 0)) {
+            st.elevation = sourced(12 * IN);
+        }
+        if let Some(w) = doc.walls.get_mut(&wall_id(1)) {
+            w.base_offset = sourced(-6 * IN);
+            w.top = WallTop::Height {
+                height: sourced(90 * IN),
+            };
+        }
+        put_opening(&mut doc, 1, 1, 10, 36, 48, 30);
+        let p = wall_profiles(&doc)?
+            .remove(&wall_id(1))
+            .ok_or(GeometryError::Overflow)?;
+        assert_eq!([p.base, p.top].map(inches), [6, 96]);
+        // The sill is measured from the storey elevation, not the wall base.
+        assert_eq!(
+            p.voids.first().map(|v| [v.sill, v.head].map(inches)),
+            Some([42, 90])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_thickness_stretch_stops_at_joins() -> Result<(), GeometryError> {
+        // L: wall 1's faces end at x = 102 (outer) and 98 (inner).
+        let p = wall_profiles(&l_join())?
+            .remove(&wall_id(1))
+            .ok_or(GeometryError::Overflow)?;
+        assert_eq!(
+            [p.start, p.end, p.full_start, p.full_end].map(inches),
+            [0, 102, 0, 98]
+        );
+        // T with the stem through: wall 1 butts at x = 98.
+        let p = wall_profiles(&t_join(0))?
+            .remove(&wall_id(1))
+            .ok_or(GeometryError::Overflow)?;
+        assert_eq!(
+            [p.start, p.end, p.full_start, p.full_end].map(inches),
+            [0, 98, 0, 98]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_opening_inside_its_host_is_valid() -> Result<(), GeometryError> {
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 4, 36, 80, 0);
+        put_opening(&mut doc, 2, 1, 60, 36, 48, 72);
+        assert_eq!(opening_violations(&doc, len(4 * IN))?, vec![]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_opening_outside_its_host_fails_validation() -> Result<(), GeometryError> {
+        let v = |doc: &Document| opening_violations(doc, len(4 * IN));
+        let one = |opening, problem| vec![OpeningViolation { opening, problem }];
+        // Past the end of a free wall.
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 80, 36, 80, 0);
+        assert_eq!(
+            v(&doc)?,
+            one(
+                opening_id(1),
+                OpeningProblem::TooCloseToEnd {
+                    clearance: len(-16 * IN)
+                }
+            )
+        );
+        // Inside, but within the 4 in jamb distance of the start.
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 2, 36, 80, 0);
+        assert_eq!(
+            v(&doc)?,
+            one(
+                opening_id(1),
+                OpeningProblem::TooCloseToStart {
+                    clearance: len(2 * IN)
+                }
+            )
+        );
+        // Into the miter of an L: full thickness ends at 98, the opening at 96.
+        let mut doc = l_join();
+        put_opening(&mut doc, 1, 1, 60, 36, 80, 0);
+        assert_eq!(
+            v(&doc)?,
+            one(
+                opening_id(1),
+                OpeningProblem::TooCloseToEnd {
+                    clearance: len(2 * IN)
+                }
+            )
+        );
+        // Into the crossing wall at a T: wall 1 butts at 98, the opening ends at 100.
+        let mut doc = t_join(0);
+        put_opening(&mut doc, 1, 1, 64, 36, 80, 0);
+        assert_eq!(
+            v(&doc)?,
+            one(
+                opening_id(1),
+                OpeningProblem::TooCloseToEnd {
+                    clearance: len(-2 * IN)
+                }
+            )
+        );
+        // Above the top and below the base.
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 10, 30, 48, 80);
+        put_opening(&mut doc, 2, 1, 50, 30, 48, -2);
+        assert_eq!(
+            v(&doc)?,
+            vec![
+                OpeningViolation {
+                    opening: opening_id(1),
+                    problem: OpeningProblem::AboveTop { by: len(8 * IN) }
+                },
+                OpeningViolation {
+                    opening: opening_id(2),
+                    problem: OpeningProblem::BelowBase { by: len(2 * IN) }
+                },
+            ]
+        );
+        // No size.
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 1, 10, 0, 48, 0);
+        assert_eq!(
+            v(&doc)?,
+            one(opening_id(1), OpeningProblem::NonPositiveSize)
+        );
+        // Unknown host.
+        let mut doc = free_wall(PosX);
+        put_opening(&mut doc, 1, 9, 10, 30, 48, 0);
+        assert_eq!(
+            v(&doc),
+            Err(GeometryError::UnknownEntity { id: wall_id(9) })
+        );
+        Ok(())
     }
 
     /// The same wall described from the other end: nodes swapped, direction

@@ -438,7 +438,12 @@ pub struct Opening {
     pub reference: Reference,
     /// Which edge of the opening sits `offset` from `reference`.
     pub anchor: OpeningEdge,
+    /// From the reference to the anchor edge, positive toward the host's
+    /// node_b (Q-20).
     pub offset: Sourced<Length>,
+    /// Solved coordinate of the start edge (the one nearer the host's
+    /// node_a) on the host's along axis. Derived and stored (Q-7, Q-20).
+    pub start: Length,
     pub width: Sourced<Length>,
     pub height: Sourced<Length>,
     pub sill: Sourced<Length>,

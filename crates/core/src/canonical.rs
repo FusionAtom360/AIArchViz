@@ -333,6 +333,7 @@ mod tests {
                 reference: Reference::Node { node: na },
                 anchor: OpeningEdge::Start,
                 offset: user(4 * FT),
+                start: len(4 * FT),
                 width: proposed(3 * FT),
                 height: proposed(6 * FT + 8 * IN),
                 sill: user(0),

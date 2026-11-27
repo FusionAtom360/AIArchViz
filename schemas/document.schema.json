@@ -948,7 +948,8 @@
           "$ref": "#/$defs/OpeningKind"
         },
         "offset": {
-          "$ref": "#/$defs/Sourced"
+          "$ref": "#/$defs/Sourced",
+          "description": "From the reference to the anchor edge, positive toward the host's\nnode_b (Q-20)."
         },
         "reference": {
           "$ref": "#/$defs/Reference",
@@ -956,6 +957,10 @@
         },
         "sill": {
           "$ref": "#/$defs/Sourced"
+        },
+        "start": {
+          "$ref": "#/$defs/Length",
+          "description": "Solved coordinate of the start edge (the one nearer the host's\nnode_a) on the host's along axis. Derived and stored (Q-7, Q-20)."
         },
         "width": {
           "$ref": "#/$defs/Sourced"
@@ -967,6 +972,7 @@
         "reference",
         "anchor",
         "offset",
+        "start",
         "width",
         "height",
         "sill"

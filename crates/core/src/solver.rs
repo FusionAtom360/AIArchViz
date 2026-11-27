@@ -18,14 +18,18 @@
 //! A class without ground is underconstrained by one translation. For a
 //! provisional model (7.4) it keeps the stored position of its lowest-id node.
 //!
-//! References to openings and items are added by T-108 and T-111 (Q-16).
+//! Each opening has one variable on its host's along axis: its start edge,
+//! placed at coordinate(reference) + direction * offset, less the anchor
+//! edge's shift. Placements are processed before constraints, in opening id
+//! order, and a placement that disagrees is a Conflict naming the opening
+//! (Q-20). Item references are added by T-111 (Q-16).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::document::{
-    Axis, Constraint, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document, Point,
-    Reference, Source, WallSide,
+    Axis, Constraint, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document,
+    OpeningEdge, Point, Reference, Source, WallSide,
 };
 use crate::identity::Uuid;
 use crate::length::Length;
@@ -100,6 +104,8 @@ pub enum Member {
     Node(Uuid),
     /// A wall's reference line (walls perpendicular to the class's axis).
     Wall(Uuid),
+    /// An opening's position along its host (Q-20).
+    Opening(Uuid),
 }
 
 /// One underconstrained class: its members move together by one translation.
@@ -114,6 +120,8 @@ pub struct FreeClass {
 pub struct Solution {
     /// Every node's position: exact where determined, provisional otherwise.
     pub nodes: BTreeMap<Uuid, Point>,
+    /// Every opening's start-edge coordinate on its host's along axis (Q-20).
+    pub openings: BTreeMap<Uuid, Length>,
     pub constraints: BTreeMap<Uuid, ConstraintReport>,
     /// Sorted by constraint id.
     pub conflicts: Vec<Conflict>,
@@ -125,6 +133,11 @@ impl Solution {
     /// Writes the solved node positions, Equal-copied values and demotions
     /// back into `document`.
     pub fn apply_to(&self, document: &mut Document) {
+        for (id, start) in &self.openings {
+            if let Some(o) = document.openings.get_mut(id) {
+                o.start = *start;
+            }
+        }
         for (id, p) in &self.nodes {
             if let Some(n) = document.nodes.get_mut(id) {
                 n.x = p.x;
@@ -356,7 +369,28 @@ struct Engine<'d> {
     doc: &'d Document,
     tolerance: i128,
     nodes: BTreeMap<Uuid, usize>,
+    /// Each opening's variable: its start edge on the host's along axis.
+    openings: BTreeMap<Uuid, usize>,
     axes: [Axis1; 2],
+}
+
+/// The axis a wall runs along and the sign of its direction on it.
+fn along_frame(direction: Direction) -> (Axis, i128) {
+    match direction {
+        Direction::PosX => (Axis::X, 1),
+        Direction::NegX => (Axis::X, -1),
+        Direction::PosY => (Axis::Y, 1),
+        Direction::NegY => (Axis::Y, -1),
+    }
+}
+
+/// How far an opening edge is from its start edge, along the host's axis.
+fn edge_shift(edge: OpeningEdge, dir: i128, width: i128) -> i128 {
+    match edge {
+        OpeningEdge::Start => 0,
+        OpeningEdge::End => dir * width,
+        OpeningEdge::Center => dir * half(width),
+    }
 }
 
 impl<'d> Engine<'d> {
@@ -367,11 +401,18 @@ impl<'d> Engine<'d> {
             .enumerate()
             .map(|(i, id)| (*id, i + 1))
             .collect();
-        let n = nodes.len() + 1;
+        let openings: BTreeMap<Uuid, usize> = doc
+            .openings
+            .keys()
+            .enumerate()
+            .map(|(i, id)| (*id, nodes.len() + 1 + i))
+            .collect();
+        let n = nodes.len() + openings.len() + 1;
         let mut engine = Engine {
             doc,
             tolerance: i128::from(tolerance.nanometers()),
             nodes,
+            openings,
             axes: [Axis1::new(n), Axis1::new(n)],
         };
         for wall in doc.walls.values() {
@@ -384,6 +425,27 @@ impl<'d> Engine<'d> {
             }
         }
         Ok(engine)
+    }
+
+    /// An opening's variable, its host's along axis and direction, and its width.
+    fn opening(&self, id: Uuid) -> Result<(usize, Axis, i128, i128), SolveError> {
+        let o = self
+            .doc
+            .openings
+            .get(&id)
+            .ok_or(SolveError::UnknownEntity { id })?;
+        let host = self
+            .doc
+            .walls
+            .get(&o.host)
+            .ok_or(SolveError::UnknownEntity { id: o.host })?;
+        let var = self
+            .openings
+            .get(&id)
+            .copied()
+            .ok_or(SolveError::UnknownEntity { id })?;
+        let (along, dir) = along_frame(host.direction);
+        Ok((var, along, dir, i128::from(o.width.value.nanometers())))
     }
 
     fn node(&self, id: Uuid) -> Result<usize, SolveError> {
@@ -455,9 +517,16 @@ impl<'d> Engine<'d> {
                 };
                 Ok((self.node(w.node_a)?, sign * toward_left))
             }
-            Reference::OpeningEdge { .. }
-            | Reference::ItemEdge { .. }
-            | Reference::ItemCenter { .. } => Err(SolveError::UnsupportedReference { constraint }),
+            Reference::OpeningEdge { opening, edge } => {
+                let (var, along, dir, width) = self.opening(opening)?;
+                if along != axis {
+                    return Err(wrong);
+                }
+                Ok((var, edge_shift(edge, dir, width)))
+            }
+            Reference::ItemEdge { .. } | Reference::ItemCenter { .. } => {
+                Err(SolveError::UnsupportedReference { constraint })
+            }
         }
     }
 
@@ -499,10 +568,30 @@ impl<'d> Engine<'d> {
         let mut order: Vec<(&Uuid, &Constraint)> = doc.constraints.iter().collect();
         order.sort_by_key(|(id, c)| (authority(c.source), **id));
 
+        let mut conflicts = Vec::new();
+
+        // Opening placements (Q-20), in id order, before any constraint:
+        // start = coordinate(reference) + direction * offset - anchor shift.
+        for (id, o) in &doc.openings {
+            let (var, along, dir, width) = self.opening(*id)?;
+            let (rv, rc) = self.resolve(&o.reference, along, *id)?;
+            let offset = i128::from(o.offset.value.nanometers());
+            let d = rc + dir * offset - edge_shift(o.anchor, dir, width);
+            let ax = &mut self.axes[axis_index(along)];
+            match ax.relation(rv, var) {
+                None => ax.union(rv, var, d, Label::Constraint(*id)),
+                Some(current) if current == d => {}
+                Some(current) => conflicts.push(Conflict {
+                    constraint: *id,
+                    with: ax.path(rv, var),
+                    residual: Some(to_length(current - d)?),
+                }),
+            }
+        }
+
         // Equal (Q-14): which Distance copies which, in processing order.
         let mut copy_from: BTreeMap<Uuid, (Uuid, Uuid)> = BTreeMap::new();
         let mut reports: BTreeMap<Uuid, ConstraintReport> = BTreeMap::new();
-        let mut conflicts = Vec::new();
         let report = |outcome| ConstraintReport {
             outcome,
             value: None,
@@ -649,6 +738,7 @@ impl<'d> Engine<'d> {
         // Positions: exact in grounded classes; otherwise anchored at the
         // stored coordinate of the class's lowest-id node (7.4).
         let mut coords: [BTreeMap<Uuid, i128>; 2] = [BTreeMap::new(), BTreeMap::new()];
+        let mut opening_starts: BTreeMap<Uuid, i128> = BTreeMap::new();
         let mut classes: [BTreeMap<usize, BTreeSet<Member>>; 2] =
             [BTreeMap::new(), BTreeMap::new()];
         for (k, axis) in [Axis::X, Axis::Y].into_iter().enumerate() {
@@ -684,6 +774,31 @@ impl<'d> Engine<'d> {
                     members.insert(Member::Wall(*id));
                 }
             }
+            for (id, &var) in &self.openings {
+                let Some(o) = doc.openings.get(id) else {
+                    continue;
+                };
+                let host = doc
+                    .walls
+                    .get(&o.host)
+                    .ok_or(SolveError::UnknownEntity { id: o.host })?;
+                if along_frame(host.direction).0 != axis {
+                    continue;
+                }
+                let (root, off) = self.axes[k].find(var);
+                let value = if root == ground_root {
+                    off - ground_off
+                } else {
+                    let stored = i128::from(o.start.nanometers());
+                    let base = *anchors.entry(root).or_insert(stored - off);
+                    classes[k]
+                        .entry(root)
+                        .or_default()
+                        .insert(Member::Opening(*id));
+                    base + off
+                };
+                opening_starts.insert(*id, value);
+            }
         }
         let mut nodes = BTreeMap::new();
         for id in doc.nodes.keys() {
@@ -708,6 +823,10 @@ impl<'d> Engine<'d> {
         }
         Ok(Solution {
             nodes,
+            openings: opening_starts
+                .into_iter()
+                .map(|(id, v)| Ok((id, to_length(v)?)))
+                .collect::<Result<_, SolveError>>()?,
             constraints: reports,
             conflicts,
             underconstrained,
@@ -1083,10 +1202,6 @@ mod tests {
             Reference::ItemEdge {
                 item: uid(7, 0),
                 side: ItemSide::Front,
-            },
-            Reference::OpeningEdge {
-                opening: uid(7, 0),
-                edge: OpeningEdge::Start,
             },
         ] {
             let mut doc = l_shape();
@@ -1539,6 +1654,291 @@ mod tests {
         // Solving the updated document again changes nothing.
         let again = solve(&doc)?;
         assert_eq!(again.nodes, s.nodes);
+        Ok(())
+    }
+
+    fn opening_id(n: u8) -> Uuid {
+        uid(10, n)
+    }
+
+    fn add_opening(
+        doc: &mut Document,
+        n: u8,
+        host: u8,
+        reference: Reference,
+        anchor: OpeningEdge,
+        offset: i64,
+        width: i64,
+    ) {
+        doc.openings.insert(
+            opening_id(n),
+            Opening {
+                kind: OpeningKind::Door,
+                host: wall_id(host),
+                reference,
+                anchor,
+                offset: sourced(offset),
+                width: sourced(width),
+                height: sourced(80 * IN),
+                sill: sourced(0),
+                start: len(0),
+            },
+        );
+    }
+
+    fn start(s: &Solution, n: u8) -> Option<i64> {
+        s.openings.get(&opening_id(n)).map(|l| l.nanometers())
+    }
+
+    /// A +X wall from (0,0) to (20 ft, 0) and a -X wall from (20 ft, 10 ft)
+    /// back to (0, 10 ft), both fully anchored.
+    fn two_walls() -> Document {
+        let mut doc = base();
+        add_node(&mut doc, 1, 0, 0);
+        add_node(&mut doc, 2, 20 * FT, 0);
+        add_node(&mut doc, 3, 20 * FT, 10 * FT);
+        add_node(&mut doc, 4, 0, 10 * FT);
+        add_wall(&mut doc, 1, 1, 2, Direction::PosX);
+        add_wall(&mut doc, 2, 3, 4, Direction::NegX);
+        let mut n = 0;
+        for (node, x, y) in [
+            (1, 0, 0),
+            (2, 20 * FT, 0),
+            (3, 20 * FT, 10 * FT),
+            (4, 0, 10 * FT),
+        ] {
+            for (axis, v) in [(Axis::X, x), (Axis::Y, y)] {
+                n += 1;
+                add(
+                    &mut doc,
+                    n,
+                    fixed(
+                        Reference::Node {
+                            node: node_id(node),
+                        },
+                        axis,
+                        v,
+                    ),
+                    Source::UserStated,
+                );
+            }
+        }
+        doc
+    }
+
+    /// The anchor edge sits at reference + offset in the host's direction;
+    /// start is the edge nearer node_a (Q-20).
+    #[test]
+    fn opening_is_placed_from_each_anchor() -> Result<(), SolveError> {
+        let w = 36 * IN;
+        for (anchor, on_pos_x, on_neg_x) in [
+            // +X wall from x = 0: anchor at 48 in. -X wall from x = 20 ft: anchor at 20 ft - 48 in.
+            (OpeningEdge::Start, 48 * IN, 20 * FT - 48 * IN),
+            (OpeningEdge::End, 48 * IN - w, 20 * FT - 48 * IN + w),
+            (
+                OpeningEdge::Center,
+                48 * IN - w / 2,
+                20 * FT - 48 * IN + w / 2,
+            ),
+        ] {
+            let mut doc = two_walls();
+            add_opening(&mut doc, 1, 1, node(1), anchor, 48 * IN, w);
+            add_opening(&mut doc, 2, 2, node(3), anchor, 48 * IN, w);
+            let s = solve(&doc)?;
+            assert_eq!(start(&s, 1), Some(on_pos_x), "{anchor:?} on +X");
+            assert_eq!(start(&s, 2), Some(on_neg_x), "{anchor:?} on -X");
+        }
+        Ok(())
+    }
+
+    /// Constraints can name each opening edge as a reference.
+    #[test]
+    fn opening_edges_position_other_things() -> Result<(), SolveError> {
+        // Opening: start 2 ft from n1, 3 ft wide. Each edge drives n1 through a Fixed.
+        for (edge, edge_offset) in [
+            (OpeningEdge::Start, 2 * FT),
+            (OpeningEdge::End, 5 * FT),
+            (OpeningEdge::Center, 2 * FT + 18 * IN),
+        ] {
+            let mut doc = l_shape();
+            add_opening(&mut doc, 1, 1, node(1), OpeningEdge::Start, 2 * FT, 3 * FT);
+            add(
+                &mut doc,
+                1,
+                fixed(
+                    Reference::OpeningEdge {
+                        opening: opening_id(1),
+                        edge,
+                    },
+                    Axis::X,
+                    10 * FT,
+                ),
+                Source::UserStated,
+            );
+            let s = solve(&doc)?;
+            assert_eq!(
+                pos(&s, 1).map(|p| p.0),
+                Some(10 * FT - edge_offset),
+                "{edge:?}"
+            );
+            assert_eq!(
+                start(&s, 1),
+                Some(10 * FT - edge_offset + 2 * FT),
+                "{edge:?}"
+            );
+        }
+        // One opening placed from another opening's End edge.
+        let mut doc = two_walls();
+        add_opening(&mut doc, 1, 1, node(1), OpeningEdge::Start, 2 * FT, 3 * FT);
+        add_opening(
+            &mut doc,
+            2,
+            1,
+            Reference::OpeningEdge {
+                opening: opening_id(1),
+                edge: OpeningEdge::End,
+            },
+            OpeningEdge::Start,
+            FT,
+            2 * FT,
+        );
+        assert_eq!(start(&solve(&doc)?, 2), Some(6 * FT));
+        // Placed from the face of a perpendicular wall.
+        let mut doc = l_shape();
+        add(&mut doc, 1, fixed(node(1), Axis::X, 0), Source::UserStated);
+        add(
+            &mut doc,
+            2,
+            dist(node(1), node(2), Axis::X, 10 * FT),
+            Source::UserStated,
+        );
+        // Wall 2 runs +Y at x = 10 ft; its left face (toward -X) is at 10 ft - 1 in.
+        let face = Reference::WallFace {
+            wall: wall_id(2),
+            side: WallSide::Left,
+            boundary: 0,
+        };
+        add_opening(&mut doc, 1, 1, face, OpeningEdge::End, -6 * IN, 3 * FT);
+        assert_eq!(
+            start(&solve(&doc)?, 1),
+            Some(10 * FT - IN - 6 * IN - 3 * FT)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn opening_edge_has_no_across_coordinate() {
+        let mut doc = l_shape();
+        add_opening(&mut doc, 1, 1, node(1), OpeningEdge::Start, 0, 3 * FT);
+        add(
+            &mut doc,
+            1,
+            fixed(
+                Reference::OpeningEdge {
+                    opening: opening_id(1),
+                    edge: OpeningEdge::Start,
+                },
+                Axis::Y,
+                0,
+            ),
+            Source::UserStated,
+        );
+        assert_eq!(
+            solve(&doc),
+            Err(SolveError::WrongAxis {
+                constraint: con_id(1)
+            })
+        );
+        let mut doc = l_shape();
+        add(
+            &mut doc,
+            1,
+            fixed(
+                Reference::OpeningEdge {
+                    opening: opening_id(9),
+                    edge: OpeningEdge::Start,
+                },
+                Axis::X,
+                0,
+            ),
+            Source::UserStated,
+        );
+        assert_eq!(
+            solve(&doc),
+            Err(SolveError::UnknownEntity { id: opening_id(9) })
+        );
+    }
+
+    #[test]
+    fn clashing_placements_are_conflicts_naming_the_openings() -> Result<(), SolveError> {
+        let mut doc = l_shape();
+        let edge = |o| Reference::OpeningEdge {
+            opening: opening_id(o),
+            edge: OpeningEdge::Start,
+        };
+        add_opening(&mut doc, 1, 1, edge(2), OpeningEdge::Start, IN, FT);
+        add_opening(&mut doc, 2, 1, edge(1), OpeningEdge::Start, IN, FT);
+        let s = solve(&doc)?;
+        assert_eq!(
+            s.conflicts,
+            vec![Conflict {
+                constraint: opening_id(2),
+                with: vec![opening_id(1)],
+                residual: Some(len(-2 * IN))
+            }]
+        );
+        // A constraint that disagrees with a placement names the opening.
+        let mut doc = l_shape();
+        add_opening(&mut doc, 1, 1, node(1), OpeningEdge::Start, 2 * FT, FT);
+        add(
+            &mut doc,
+            1,
+            dist(
+                node(1),
+                Reference::OpeningEdge {
+                    opening: opening_id(1),
+                    edge: OpeningEdge::Start,
+                },
+                Axis::X,
+                FT,
+            ),
+            Source::UserStated,
+        );
+        assert_eq!(
+            solve(&doc)?.conflicts,
+            vec![Conflict {
+                constraint: con_id(1),
+                with: vec![opening_id(1)],
+                residual: Some(len(FT))
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn free_openings_are_reported_and_stored() -> Result<(), SolveError> {
+        let mut doc = l_shape();
+        add_opening(&mut doc, 1, 1, node(1), OpeningEdge::Start, 2 * FT, FT);
+        let s = solve(&doc)?;
+        let x_class = s
+            .underconstrained
+            .iter()
+            .find(|c| c.axis == Axis::X)
+            .map(|c| c.members.clone());
+        assert_eq!(
+            x_class,
+            Some(vec![
+                Member::Node(node_id(1)),
+                Member::Opening(opening_id(1))
+            ])
+        );
+        // n1 keeps its stored x = 0, so the opening starts at 2 ft.
+        assert_eq!(start(&s, 1), Some(2 * FT));
+        s.apply_to(&mut doc);
+        assert_eq!(
+            doc.openings.get(&opening_id(1)).map(|o| o.start),
+            Some(len(2 * FT))
+        );
         Ok(())
     }
 
