@@ -322,6 +322,41 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: `write_dxf` draws no dimension for a driving Distance constraint whose value is zero, such as the anchors that pin a plan to its origin datum on x and y; such a constraint fixes a position and has no span to dimension. The constraint itself is unchanged, and the remaining dimensions stack in order as before without gaps.
 - Done when: a test on a derived plan anchored to its origin datum by zero distances on x and y shows no 0'-0" text and no zero-length line on DIMENSIONS, with one dimension per non-zero driving Distance constraint; the DXF golden is unchanged.
 
+**T-197 Inverse deltas for move and set-value commands.** Spec 13.2, 8.3; Q-74; REVIEW-1 M-1. Depends on T-196.
+
+- Build: core computes, for a committed MoveWall, MoveOpening, MoveOccurrence or SetConstraintValue, its inverse as a command of the same kind that moves back by the same displacement or restores the prior value, from the document before the commit. The inverse is ordinary deterministic code (P2); stored-state undo is unchanged.
+- Done when: a proptest over random documents and random commands of each of the four kinds shows that committing the command and then its inverse gives a document byte-identical to the original in canonical form, and unit tests cover a move whose push chain (8.8) moved other items.
+
+**T-198 The solver timing test runs in every check.** Spec 7.3; T-106; Q-74; REVIEW-1 M-2. Depends on T-197.
+
+- Build: `cargo xtask check` adds a step that runs the timing test in a release build. The workload becomes 500 mixed elements (walls, openings and occurrences) with 1,500 constraints, built deterministically. The test asserts under 50 ms and prints the measured time.
+- Done when: `cargo xtask check` fails when the 50 ms bound is exceeded (shown by a test of the step's pass and fail handling), and passes on the current solver with the time recorded in PROGRESS.md.
+
+**T-199 The float lint catches decimal literals and f32/f64 inside names.** CLAUDE.md hard rules; Q-74; REVIEW-1 M-4. Depends on T-198.
+
+- Build: the float lint also flags, in crates/core outside comments and strings, any decimal or exponent float literal (`0.5`, `1e3`, `2.`) and any identifier that contains `f32` or `f64` (`as_f64`, `to_f64`, `f64_from`).
+- Done when: lint unit tests flag each of those forms and pass `0..5`, `x.0` tuple fields, integer literals with suffixes and the words in comments and strings; `core_crate_is_clean` still passes.
+
+**T-199b Tooling enforces no panics and no wrapping in core.** CLAUDE.md hard rules; spec 5.1; Q-74; REVIEW-1 M-5. Depends on T-199.
+
+- Build: the release profile sets `overflow-checks = true`. crates/core denies `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic` and `clippy::indexing_slicing` outside test code, and the indexed paths REVIEW-1 lists (edit.rs, geometry.rs, solver.rs, roof.rs, items.rs) use `get` or iterators, returning an error where an index could be out of range. `clippy::arithmetic_side_effects` is not enabled (Q-74).
+- Done when: `cargo xtask check` passes with the new lints; a test or xtask check shows a release build of core panics on overflow instead of wrapping; every existing golden is unchanged.
+
+**T-199c ExistingConditionEdit shows the baseline value.** Spec 6.7; Q-74; REVIEW-1 M-6. Depends on T-199b.
+
+- Build: the baseline snapshot is the first committed state of each entity unless the user creates a snapshot. `Flag::ExistingConditionEdit` carries, for each changed path of the existing element, the baseline value in nanometers and in display units.
+- Done when: a test shows that a second edit to an existing wall reports the baseline value, not the value after the first edit; an existing element added after the first commit uses its own first committed state; a proposal touching no existing element has no such flag.
+
+**T-199d The CLI fallback error is valid JSON.** Spec 9.1 (C2); Q-74; REVIEW-1 M-9. Depends on T-199c.
+
+- Build: the fallback response used when canonical serialization fails is built from a JSON value, not by string formatting, so any message is escaped.
+- Done when: a test feeds the fallback a message containing `"`, `\` and a control character and parses stdout as JSON with the message intact.
+
+**T-199e Proposals carry the echo text.** Spec 9.4; T-112; Q-74; REVIEW-1 M-10. Depends on T-199d.
+
+- Build: each resolved command in a Proposal gets its canonical plain-language rendering, built by deterministic code from labels, directions and lengths in feet-inches-fractions (for example "Move L-003 4 in toward the east along W-007"). The CLI `apply` stays a one-call commit (DEC-10).
+- Done when: a table test covers one rendering per command kind; the same proposal always renders the same text; the text uses labels, never ids, where a label exists.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.

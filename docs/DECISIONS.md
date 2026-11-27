@@ -87,3 +87,27 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
   - Walk: the shop walked in Play In Editor with nothing wrong noted: pass.
   - Screenshots: four (L-room exterior with its shed roof; L-room interior with door, window, ceiling and the marker box raised 36 in; shop from above with the extension; shop interior among the equipment boxes). They were reviewed on 2026-11-27 and the owner keeps them outside the repository. They are consistent with the fixtures: the shop's main block has no roof or ceiling, since only the extension is roofed (G-2).
 - Status: approved (owner, G-4, 2026-11-27)
+
+## DEC-8: Migrations come with the first schema change
+- Date: 2026-11-27
+- Task or spike: REVIEW-1 M-7 (Q-74)
+- Spec section: 5.5
+- Decision: schema_version stays 1 and the parser keeps rejecting every other version. There is no migration hook yet. The first change to the document schema must add the hook, a migration from version 1 and a test that a version-1 document migrates and replays byte-identically, before the version is bumped.
+- Rationale: with one version there is nothing to migrate, and a hook with no migration to exercise would be untested code.
+- Status: approved (owner, Q-74, 2026-11-27)
+
+## DEC-9: CLI output bounds are built with the Phase 3 tool surface
+- Date: 2026-11-27
+- Task or spike: REVIEW-1 M-8 (Q-74)
+- Spec section: 9.1, 9.8
+- Decision: the 8 KB bound, pagination and compact form of 9.8 are built with the tool surface (T-301 to T-308), and the CLI then shares them. Until then the CLI is a development interface and its output is unbounded.
+- Rationale: 9.8 defines the bounds for tool results; building them once with the tools avoids a second, CLI-only format.
+- Status: approved (owner, Q-74, 2026-11-27)
+
+## DEC-10: Commit confirmation is the app's; the CLI apply stays one call
+- Date: 2026-11-27
+- Task or spike: REVIEW-1 M-10 (Q-74)
+- Spec section: 9.4
+- Decision: proposals carry the canonical echo text (T-199e). Explicit confirmation of that text is built in the app in Phase 2. The CLI `apply` keeps proposing and committing in one call, and no interactive CLI prompt is built; scripts, fixtures and harnesses that want a confirmation step use `propose` then `commit`.
+- Rationale: the CLI is driven by scripts and fixtures, where a prompt would block; the propose and commit pair already lets a caller confirm the echo before committing.
+- Status: approved (owner, Q-74, 2026-11-27)

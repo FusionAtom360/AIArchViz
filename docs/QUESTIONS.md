@@ -523,7 +523,7 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Recommendation: (a). It keeps the Q-47 layout and cost, matches what "committed" already means (the answer comes only after the newline is flushed), and recovers projects torn before the fix.
 - Answer: (a) (owner, 2026-11-27). T-193 added to docs/PLAN.md.
 
-## Q-74: How to triage REVIEW-1 M-1 to M-10 and close Phase 1 (status: open)
+## Q-74: How to triage REVIEW-1 M-1 to M-10 and close Phase 1 (status: answered)
 - Context: PLAN section 11 says each review finding is either accepted as a task (T-190 and up) or recorded in docs/DECISIONS.md as not needed, and `phase-N` is tagged when the findings are closed. C-1, C-2 and H-1 to H-5 are closed (T-190 to T-195; T-196 fixed zero-length DXF dimensions from an owner report). M-1 to M-10 have not been triaged. `phase-1` was tagged at `737f67c` when C-2 closed (Q-72), before T-192 to T-196. Two later changes also touch outputs a gate checked by hand: T-195 adds a PROPOSED layer to provisional DXFs (G-3 opened the DXF in AutoCAD 2018), and T-195 and T-196 change the L-room slice files G-4 imported (only GLB root `extras` and DXF content, not geometry).
 - Proposed triage, item by item:
   - M-1 (13.2 inverse deltas): accept. Core has no inverse delta at all (`grep -i inverse crates/core/src` is empty), so the task builds the inverse of MoveWall, MoveOpening, MoveOccurrence and SetConstraintValue and a proptest that applying it restores a byte-identical document.
@@ -542,4 +542,4 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   - (c) Keep `phase-1` where it is and record in DECISIONS.md that the medium findings are closed in Phase 2's first tasks.
 - Options for the gates: (i) the owner re-opens the slice shop.dxf in AutoCAD 2018 (repeat of G-3, no repair prompt, PROPOSED layer readable) together with M-3; (ii) no repeat, since T-195 adds only TEXT entities and a layer of the kinds G-3 already accepted.
 - Recommendation: the triage as proposed (T-197 to T-203 for M-1, M-2, M-4, M-5, M-6, M-9 and the M-10 echo; DEC entries for M-7, M-8 and the M-10 prompt), tag option (b), which closes the findings as section 11 asks without rewriting a published tag, and gate option (i), done in the same sitting as M-3.
-- Answer:
+- Answer: as recommended (owner, 2026-11-27): the triage as proposed, tag option (b), gate option (i). PLAN section 11 gives review tasks only T-190 to T-199, and T-201 and up belong to Phase 2, so the recommendation's T-197 to T-203 are numbered T-197, T-198, T-199 and T-199b to T-199e, following the T-122b precedent. Tasks added to docs/PLAN.md; DEC-8 (M-7), DEC-9 (M-8) and DEC-10 (M-10 confirmation) added to docs/DECISIONS.md.

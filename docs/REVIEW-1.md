@@ -98,19 +98,23 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 ## Medium
 
 ### M-1: No property test for inverse deltas (spec 13.2)
+- **Status: open**, planned as T-197.
 13.2 says: "for move and set-value commands the inverse delta does too [restore a byte-identical document]". The repository has no such test: `grep -i inverse crates/core/src` finds nothing. The undo tests (`undo_restores_the_exact_prior_state`, `replay_and_undo_are_exact`) cover stored-state undo, not applying the inverse delta of MoveWall, MoveOpening, MoveOccurrence or SetConstraintValue.
 
 ### M-2: The T-106 timing requirement is never enforced
+- **Status: open**, planned as T-198.
 - **Where:** `xtask/src/main.rs:358`.
 - **Problem:** `solver_500_elements_under_50_ms` is `#[ignore]`, and `cargo xtask check` runs only debug tests. The "under 50 ms in release" Done-when line rests on one manual measurement in PROGRESS.md.
 - **Also:** the workload is "500 walls / 1,500 constraints". It is not 500 mixed elements with openings and occurrences, which the solver now also handles (T-108, T-111).
 
 ### M-3: The Khronos validator result is stale
+- **Status: open**, an owner step (Q-74): re-run the Khronos glTF Validator on the current golden and the slice GLBs and record the results in DEC-2, in the same sitting as a repeat of G-3 on the slice shop.dxf.
 - DEC-2 validated the golden GLB with SHA-256 `0ebc5c07…`.
 - The current golden, `crates/export/src/gltf/snapshots/archviz_export__gltf__tests__golden_l_room_glb.snap.glb`, has SHA-256 `f2883ce9…`.
 - T-122b changed the mesh format: welded vertices, no normals, and walls as cell-grid solids. Nobody has re-run the validator on the format that G-4 will import.
 
 ### M-4: The float lint misses unsuffixed literals and identifiers that contain f64
+- **Status: open**, planned as T-199.
 - **Where:** `xtask/src/float_lint.rs:65-91`. A token preceded by an identifier character is flagged only when the word starts with a digit.
 - **What gets through:**
   - `let x = 0.5;` has no `f64` token at all.
@@ -118,6 +122,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Today:** core contains none of these (I searched). But CLAUDE.md's "no f32 or f64" rule is weaker than it looks. `core_crate_is_clean` would still pass if one were added.
 
 ### M-5: No tooling enforces "no panics" and "never wraps"
+- **Status: open**, planned as T-199b.
 - **Where:** `Cargo.toml:21-25`. The workspace denies `clippy::all` but not:
   - `clippy::arithmetic_side_effects`
   - `clippy::indexing_slicing`
@@ -130,17 +135,20 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
   - I found no input that reaches an out-of-bounds index. Nothing but review guards those paths, though.
 
 ### M-6: ExistingConditionEdit does not show the baseline value (spec 6.7)
+- **Status: open**, planned as T-199c.
 - **Where:** `crates/core/src/proposal.rs:139` and `:600`.
 - **Spec:** 6.7 says the flag "shows the original value from the baseline snapshot (the first committed state, or a snapshot the user creates)".
 - **What it does:** the flag carries only `{collection, id}`. The diff's `before` is the head value, not the baseline.
 - **Missing test:** an edit to an existing element made after an earlier edit shows the baseline value.
 
 ### M-7: The document has no migrations (spec 5.5)
+- **Status: closed** by DEC-8 (Q-74, 2026-11-27): migrations come with the first schema change.
 - **Where:** `crates/core/src/canonical.rs:58-60`.
 - **Spec:** 5.5 says "The document has a schema_version and migrations."
 - **What it does:** the parser rejects every `schema_version` other than 1. There is no migration hook or migration test. This is acceptable at version 1, but it is not yet decided whether this is deferred (no QUESTIONS entry).
 
 ### M-8: CLI output is unbounded (spec 9.8, C2 used by agent harnesses)
+- **Status: closed** by DEC-9 (Q-74, 2026-11-27): bounds are built with the Phase 3 tool surface.
 - **Where:**
   - `crates/cli/src/lib.rs:354`: `query` with no collection returns the whole document.
   - `crates/cli/src/lib.rs:267`: a `BLOCKED` error embeds the entire proposal in `details`. A one-wall shop commit's error was about 3 KB; a large edit scales with the diff.
@@ -148,10 +156,12 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Spec:** 9.8 bounds tool results at 8 KB, paginated, for a 500-element project. This is formally Phase 3, but 9.1 and C2 say external harnesses use the CLI now.
 
 ### M-9: The CLI fallback error is built by string formatting
+- **Status: open**, planned as T-199d.
 - **Where:** `crates/cli/src/lib.rs:212-216`. If canonical serialization fails, the response is `format!` with `"message":"{e}"`, unescaped.
 - **Impact:** a message containing `"` or `\` gives invalid JSON on stdout, which breaks C2's "JSON out" contract.
 
 ### M-10: The echo rule (spec 9.4) is not implemented in proposals
+- **Status: open**, echo text planned as T-199e; the CLI confirmation step is closed by DEC-10 (Q-74, 2026-11-27).
 - **Where:** `crates/core/src/proposal.rs:169` (`Proposal`).
 - **Spec:** T-112 cites 9.4: "Before commit, the System renders the resolved command in canonical plain language".
 - **What exists:** `Proposal` has resolved commands and display-unit diffs, but no rendered echo text.
