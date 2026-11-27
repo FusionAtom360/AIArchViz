@@ -68,8 +68,8 @@ pub use params::{
     required_parameters,
 };
 pub use proposal::{
-    Ambiguity, AmbiguityKind, Change, CommitError, DeriveError, Derived, DiffEntry, Flag, Proposal,
-    ProposeError, ProposedAction, commit, derive, propose,
+    Ambiguity, AmbiguityKind, BaselineValue, Change, CommitError, DeriveError, Derived, DiffEntry,
+    Flag, Proposal, ProposeError, ProposedAction, commit, derive, propose,
 };
 pub use roof::{RoofGeometry, RoofProblem, derive_roofs, roof_geometry, roof_outline};
 pub use solver::{

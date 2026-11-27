@@ -127,7 +127,7 @@ pub struct Ambiguity {
 }
 
 /// Something the user should notice before confirming (Q-36).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Flag {
     /// An added or changed value with source Proposed (6.4, 7.4).
@@ -137,7 +137,23 @@ pub enum Flag {
         path: String,
     },
     /// An existing element, or one hosted on an existing wall, changes (6.7).
-    ExistingConditionEdit { collection: String, id: Uuid },
+    ExistingConditionEdit {
+        collection: String,
+        id: Uuid,
+        /// For each changed path of the entity, its baseline value.
+        baseline: Vec<BaselineValue>,
+    },
+}
+
+/// The value at one path of an entity in the baseline snapshot (6.7).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct BaselineValue {
+    /// The JSON pointer within the entity, as in `DiffEntry::changed_paths`.
+    pub path: String,
+    /// The baseline value in nanometers; none if the path did not exist.
+    pub value: Option<Value>,
+    /// The same value with every Length shown in feet-inches-fractions.
+    pub display: Option<Value>,
 }
 
 /// How an entity changes.
@@ -410,7 +426,7 @@ pub fn propose(history: &History, action: &ProposedAction) -> Result<Proposal, P
         }
     };
     let diff = diff_documents(base, &after)?;
-    let flags = flags(base, &after, &diff);
+    let flags = flags(base, &after, history.baseline(), &diff)?;
     let mut conflicts = solution.conflicts;
     conflicts.extend(obstructions);
     Ok(Proposal {
@@ -472,11 +488,25 @@ fn json(doc: &Document) -> Result<Value, ProposeError> {
     serde_json::to_value(doc).map_err(|e| ProposeError::Json(CanonicalError::Json(e.to_string())))
 }
 
+/// The JSON Schema of the document, through which Lengths are found.
+fn document_schema() -> Result<Value, ProposeError> {
+    serde_json::to_value(schemars::schema_for!(Document))
+        .map_err(|e| ProposeError::Json(CanonicalError::Json(e.to_string())))
+}
+
+/// The schema of one entity of the collection `key`.
+fn entity_schema(root: &Value, key: &str) -> Value {
+    root.get("properties")
+        .and_then(|p| p.get(key))
+        .and_then(|f| f.get("additionalProperties"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// One entry per changed entity, ordered by collection then id (Q-36).
 fn diff_documents(base: &Document, after: &Document) -> Result<Vec<DiffEntry>, ProposeError> {
     let (a, b) = (json(base)?, json(after)?);
-    let root = serde_json::to_value(schemars::schema_for!(Document))
-        .map_err(|e| ProposeError::Json(CanonicalError::Json(e.to_string())))?;
+    let root = document_schema()?;
     let empty = serde_json::Map::new();
     let (am, bm) = (
         a.as_object().unwrap_or(&empty),
@@ -515,10 +545,7 @@ fn diff_documents(base: &Document, after: &Document) -> Result<Vec<DiffEntry>, P
             });
         };
         if COLLECTIONS.contains(&key.as_str()) {
-            let entity_schema = field_schema
-                .get("additionalProperties")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let entity_schema = entity_schema(&root, key);
             let (xa, ya) = (
                 am.get(key).and_then(Value::as_object).unwrap_or(&empty),
                 bm.get(key).and_then(Value::as_object).unwrap_or(&empty),
@@ -557,7 +584,15 @@ fn proposed_paths(v: &Value, at: &str, out: &mut Vec<String>) {
     }
 }
 
-fn flags(base: &Document, after: &Document, diff: &[DiffEntry]) -> Vec<Flag> {
+/// ProposedValue flags, sorted, then ExistingConditionEdit flags in diff
+/// order (collection, then id), each with the baseline values (6.7) of the
+/// entity's changed paths.
+fn flags(
+    base: &Document,
+    after: &Document,
+    baseline: &Document,
+    diff: &[DiffEntry],
+) -> Result<Vec<Flag>, ProposeError> {
     let existing = |wall: &Uuid| {
         [base, after].iter().any(|d| {
             d.walls
@@ -565,7 +600,10 @@ fn flags(base: &Document, after: &Document, diff: &[DiffEntry]) -> Vec<Flag> {
                 .is_some_and(|w| w.function == Function::Existing)
         })
     };
-    let mut out = BTreeSet::new();
+    let mut proposed = BTreeSet::new();
+    let mut edits = Vec::new();
+    // The baseline as JSON and the schema, made only when first needed.
+    let mut baseline_json: Option<(Value, Value)> = None;
     for d in diff {
         if let (Some(after_value), true) = (&d.after, d.change != Change::Removed) {
             let mut paths = Vec::new();
@@ -576,11 +614,7 @@ fn flags(base: &Document, after: &Document, diff: &[DiffEntry]) -> Vec<Flag> {
                         .iter()
                         .any(|c| c == &p || c.starts_with(&format!("{p}/")));
                 if touched {
-                    out.insert(Flag::ProposedValue {
-                        collection: d.collection.clone(),
-                        id: d.id,
-                        path: p,
-                    });
+                    proposed.insert((d.collection.clone(), d.id, p));
                 }
             }
         }
@@ -602,13 +636,49 @@ fn flags(base: &Document, after: &Document, diff: &[DiffEntry]) -> Vec<Flag> {
         };
         let is_wall_edit = d.collection != "walls" || d.change != Change::Added;
         if on_existing && is_wall_edit {
-            out.insert(Flag::ExistingConditionEdit {
+            let mut values = Vec::new();
+            if !d.changed_paths.is_empty() {
+                let (json_baseline, root) = match baseline_json.take() {
+                    Some(made) => made,
+                    None => (json(baseline)?, document_schema()?),
+                };
+                let entity = serde_json::to_value(id)
+                    .ok()
+                    .and_then(|key| {
+                        json_baseline
+                            .get(&d.collection)
+                            .and_then(|c| c.get(key.as_str()?))
+                    })
+                    .cloned();
+                let shown = entity
+                    .as_ref()
+                    .map(|v| display(v, &entity_schema(&root, &d.collection), &root));
+                for path in &d.changed_paths {
+                    values.push(BaselineValue {
+                        path: path.clone(),
+                        value: entity.as_ref().and_then(|v| v.pointer(path)).cloned(),
+                        display: shown.as_ref().and_then(|v| v.pointer(path)).cloned(),
+                    });
+                }
+                baseline_json = Some((json_baseline, root));
+            }
+            edits.push(Flag::ExistingConditionEdit {
                 collection: d.collection.clone(),
                 id,
+                baseline: values,
             });
         }
     }
-    out.into_iter().collect()
+    let mut out: Vec<Flag> = proposed
+        .into_iter()
+        .map(|(collection, id, path)| Flag::ProposedValue {
+            collection,
+            id,
+            path,
+        })
+        .collect();
+    out.extend(edits);
+    Ok(out)
 }
 
 /// The document's entity maps, keyed by id; every other field is a singleton.
@@ -1050,10 +1120,170 @@ mod tests {
         let c = door(1, wall, a, 4);
         let p = propose(&history, &commands(vec![c.clone()]))?;
         let id = Uuid::derive(c.idempotency_key, "command", "0");
+        // An added opening has no changed paths, so no baseline values.
         assert!(p.flags.contains(&Flag::ExistingConditionEdit {
             collection: "openings".into(),
-            id
+            id,
+            baseline: Vec::new(),
         }));
+        Ok(())
+    }
+
+    fn commit_commands(history: &mut History, c: Vec<Command>) -> Result<(), String> {
+        let p = propose(history, &commands(c)).map_err(|e| e.to_string())?;
+        commit(history, &p, 1_000, "user")
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn set_left_extent(n: u8, wall: Uuid, nm: i64) -> Command {
+        let user = |nm: i64| Sourced {
+            value: Length::from_nanometers(nm),
+            source: Source::UserStated,
+        };
+        cmd(
+            n,
+            Action::SetWallLayers(crate::command::SetWallLayers {
+                wall,
+                layers: vec![Layer {
+                    material: uid(25),
+                    thickness: user(114_300_000),
+                    core: true,
+                }],
+                left_extent: user(nm),
+            }),
+        )
+    }
+
+    fn baseline_of(p: &Proposal, collection: &str, id: Uuid) -> Option<Vec<BaselineValue>> {
+        p.flags.iter().find_map(|f| match f {
+            Flag::ExistingConditionEdit {
+                collection: c,
+                id: i,
+                baseline,
+            } if c == collection && *i == id => Some(baseline.clone()),
+            _ => None,
+        })
+    }
+
+    fn baseline_at<'a>(baseline: &'a [BaselineValue], path: &str) -> Option<&'a BaselineValue> {
+        baseline.iter().find(|b| b.path == path)
+    }
+
+    #[test]
+    fn a_second_edit_to_an_existing_wall_shows_the_baseline_value() -> Result<(), String> {
+        let (mut doc, wall, _) = with_wall();
+        if let Some(w) = doc.walls.get_mut(&wall) {
+            w.function = Function::Existing;
+        }
+        let mut history = History::new(doc);
+        // First edit: 2 1/4 in to 2 in.
+        commit_commands(&mut history, vec![set_left_extent(1, wall, 50_800_000)])?;
+        // Second edit: 2 in to 1 1/2 in.
+        let p = propose(
+            &history,
+            &commands(vec![set_left_extent(2, wall, 38_100_000)]),
+        )
+        .map_err(|e| e.to_string())?;
+        let entry = p
+            .diff
+            .iter()
+            .find(|d| d.collection == "walls" && d.id == Some(wall))
+            .ok_or("the wall is not in the diff")?;
+        // The diff's before is the head, after the first edit.
+        assert_eq!(
+            entry
+                .before
+                .as_ref()
+                .map(|v| v["left_extent"]["value"].clone()),
+            Some(Value::from(50_800_000_i64))
+        );
+        let baseline = baseline_of(&p, "walls", wall).ok_or(format!("no flag: {:?}", p.flags))?;
+        // One baseline value per changed path.
+        let paths: Vec<&str> = baseline.iter().map(|b| b.path.as_str()).collect();
+        assert_eq!(paths, entry.changed_paths);
+        assert_eq!(
+            baseline_at(&baseline, "/left_extent/value"),
+            Some(&BaselineValue {
+                path: "/left_extent/value".into(),
+                value: Some(Value::from(57_150_000_i64)),
+                display: Some(Value::String("0'-2 1/4\"".into())),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_existing_wall_added_later_uses_its_own_first_committed_state() -> Result<(), String> {
+        let (doc, _, a) = with_wall();
+        let mut history = History::new(doc);
+        let node = cmd(1, create_node(0, 10 * 304_800_000));
+        let c = Uuid::derive(node.idempotency_key, "command", "0");
+        commit_commands(&mut history, vec![node])?;
+        let create = cmd(
+            2,
+            Action::CreateWall(crate::create::CreateWall {
+                storey: uid(23),
+                node_a: a,
+                node_b: c,
+                direction: Direction::PosY,
+                function: Function::Existing,
+                layers: None,
+                left_extent: None,
+                base_offset: None,
+                top: None,
+                join_priority: None,
+            }),
+        );
+        let wall = Uuid::derive(create.idempotency_key, "command", "0");
+        commit_commands(&mut history, vec![create])?;
+        let first = history
+            .document()
+            .walls
+            .get(&wall)
+            .map(|w| w.left_extent.value.nanometers())
+            .ok_or("the wall was not created")?;
+        assert_ne!(first, 50_800_000);
+        commit_commands(&mut history, vec![set_left_extent(3, wall, 50_800_000)])?;
+        let p = propose(
+            &history,
+            &commands(vec![set_left_extent(4, wall, 38_100_000)]),
+        )
+        .map_err(|e| e.to_string())?;
+        let baseline = baseline_of(&p, "walls", wall).ok_or(format!("no flag: {:?}", p.flags))?;
+        assert_eq!(
+            baseline_at(&baseline, "/left_extent/value").map(|b| (&b.value, &b.display)),
+            Some((
+                &Some(Value::from(first)),
+                &Some(Value::String(format_length(Length::from_nanometers(first))))
+            ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_proposal_touching_no_existing_element_has_no_such_flag() -> Result<(), String> {
+        let is_existing_edit = |f: &Flag| matches!(f, Flag::ExistingConditionEdit { .. });
+        // A door on a new wall.
+        let (doc, wall, a) = with_wall();
+        let p = propose(&History::new(doc), &commands(vec![door(1, wall, a, 4)]))
+            .map_err(|e| e.to_string())?;
+        assert!(!p.flags.is_empty(), "the door's defaults are flagged");
+        assert!(!p.flags.iter().any(is_existing_edit), "{:?}", p.flags);
+        // An existing wall in the document, but the proposal leaves it alone.
+        let (mut doc, wall, _) = with_wall();
+        if let Some(w) = doc.walls.get_mut(&wall) {
+            w.function = Function::Existing;
+        }
+        let units = cmd(
+            2,
+            Action::SetProjectUnits(SetProjectUnits {
+                default_unit: ProjectUnit::Feet,
+            }),
+        );
+        let p = propose(&History::new(doc), &commands(vec![units])).map_err(|e| e.to_string())?;
+        assert!(!p.diff.is_empty());
+        assert!(!p.flags.iter().any(is_existing_edit), "{:?}", p.flags);
         Ok(())
     }
 

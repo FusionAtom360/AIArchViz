@@ -100,6 +100,25 @@
       ],
       "type": "string"
     },
+    "BaselineValue": {
+      "description": "The value at one path of an entity in the baseline snapshot (6.7).",
+      "properties": {
+        "display": {
+          "description": "The same value with every Length shown in feet-inches-fractions."
+        },
+        "path": {
+          "description": "The JSON pointer within the entity, as in `DiffEntry::changed_paths`.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The baseline value in nanometers; none if the path did not exist."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "Boundary": {
       "description": "A rectilinear boundary given explicitly or taken from spaces.",
       "oneOf": [
@@ -2135,6 +2154,13 @@
           "properties": {
             "existing_condition_edit": {
               "properties": {
+                "baseline": {
+                  "description": "For each changed path of the entity, its baseline value.",
+                  "items": {
+                    "$ref": "#/$defs/BaselineValue"
+                  },
+                  "type": "array"
+                },
                 "collection": {
                   "type": "string"
                 },
@@ -2144,7 +2170,8 @@
               },
               "required": [
                 "collection",
-                "id"
+                "id",
+                "baseline"
               ],
               "type": "object"
             }

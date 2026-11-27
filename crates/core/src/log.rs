@@ -14,6 +14,12 @@
 //! undo history only from that point on, so an undo past it is an error.
 //! Duplicate idempotency keys are detected among the events this history has
 //! seen (all of them when replaying from the start).
+//!
+//! The history also keeps the baseline of 6.7: every entity of the document
+//! it started from (the genesis document or a snapshot, Q-10), plus each
+//! later entity as it was in the first commit that held it. Undo and redo
+//! restore the baseline with the document, so an undone commit leaves no
+//! trace in it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -115,15 +121,79 @@ impl fmt::Display for LogError {
 
 impl std::error::Error for LogError {}
 
+/// A document and the baseline that goes with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct State {
+    document: Document,
+    baseline: Document,
+}
+
 /// The current document plus everything needed for undo and redo.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
     document: Document,
+    baseline: Document,
     version: u64,
     base_version: u64,
-    undo: Vec<Document>,
-    redo: Vec<Document>,
+    undo: Vec<State>,
+    redo: Vec<State>,
     keys: BTreeMap<Uuid, u64>,
+}
+
+/// Adds to `baseline` every entity of `document` it does not hold yet.
+fn extend_baseline(baseline: &mut Document, document: &Document) {
+    fn extend<T: Clone>(into: &mut BTreeMap<Uuid, T>, from: &BTreeMap<Uuid, T>) {
+        for (id, entity) in from {
+            into.entry(*id).or_insert_with(|| entity.clone());
+        }
+    }
+    // Listing every field, with no `..`, makes a new collection a compile error here.
+    let Document {
+        schema_version: _,
+        project: _,
+        building: _,
+        storeys,
+        datums,
+        nodes,
+        walls,
+        layer_sets,
+        openings,
+        slabs,
+        ceilings,
+        spaces,
+        materials,
+        element_types,
+        occurrences,
+        features,
+        constraints,
+        variant_slots,
+        assets,
+        roofs,
+        underlays,
+        camera_bookmarks,
+        default_walk_start: _,
+        labels: _,
+        acknowledged: _,
+    } = document;
+    extend(&mut baseline.storeys, storeys);
+    extend(&mut baseline.datums, datums);
+    extend(&mut baseline.nodes, nodes);
+    extend(&mut baseline.walls, walls);
+    extend(&mut baseline.layer_sets, layer_sets);
+    extend(&mut baseline.openings, openings);
+    extend(&mut baseline.slabs, slabs);
+    extend(&mut baseline.ceilings, ceilings);
+    extend(&mut baseline.spaces, spaces);
+    extend(&mut baseline.materials, materials);
+    extend(&mut baseline.element_types, element_types);
+    extend(&mut baseline.occurrences, occurrences);
+    extend(&mut baseline.features, features);
+    extend(&mut baseline.constraints, constraints);
+    extend(&mut baseline.variant_slots, variant_slots);
+    extend(&mut baseline.assets, assets);
+    extend(&mut baseline.roofs, roofs);
+    extend(&mut baseline.underlays, underlays);
+    extend(&mut baseline.camera_bookmarks, camera_bookmarks);
 }
 
 impl History {
@@ -138,6 +208,7 @@ impl History {
     /// A history starting at a snapshot.
     pub fn from_snapshot(snapshot: Snapshot) -> Self {
         History {
+            baseline: snapshot.document.clone(),
             document: snapshot.document,
             version: snapshot.version,
             base_version: snapshot.version,
@@ -151,6 +222,13 @@ impl History {
         &self.document
     }
 
+    /// The baseline of 6.7: each entity as it was in the document this
+    /// history started from, or in the first commit that held it. Only the
+    /// entity maps are meaningful; the other fields are the starting ones.
+    pub fn baseline(&self) -> &Document {
+        &self.baseline
+    }
+
     /// The sequence of the last event applied (the head version of 8.4).
     pub fn version(&self) -> u64 {
         self.version
@@ -158,12 +236,12 @@ impl History {
 
     /// The document an Undo would restore, if any.
     pub fn peek_undo(&self) -> Option<&Document> {
-        self.undo.last()
+        self.undo.last().map(|s| &s.document)
     }
 
     /// The document a Redo would restore, if any.
     pub fn peek_redo(&self) -> Option<&Document> {
-        self.redo.last()
+        self.redo.last().map(|s| &s.document)
     }
 
     /// The current state as a snapshot.
@@ -205,7 +283,12 @@ impl History {
                 }
                 // Derive positions, joins, boundaries and acknowledgments (Q-35).
                 let next = derive(next).map_err(LogError::Derive)?.document;
-                let prior = std::mem::replace(&mut self.document, next);
+                let mut baseline = self.baseline.clone();
+                extend_baseline(&mut baseline, &next);
+                let prior = self.replace(State {
+                    document: next,
+                    baseline,
+                });
                 self.undo.push(prior);
                 self.redo.clear();
                 self.keys.append(&mut seen);
@@ -218,17 +301,25 @@ impl History {
                 } else {
                     LogError::NothingToUndo
                 })?;
-                let current = std::mem::replace(&mut self.document, prior);
+                let current = self.replace(prior);
                 self.redo.push(current);
             }
             Event::Redo => {
                 let next = self.redo.pop().ok_or(LogError::NothingToRedo)?;
-                let current = std::mem::replace(&mut self.document, next);
+                let current = self.replace(next);
                 self.undo.push(current);
             }
         }
         self.version = entry.sequence;
         Ok(())
+    }
+
+    /// Makes `state` current and returns the state it replaces.
+    fn replace(&mut self, state: State) -> State {
+        State {
+            document: std::mem::replace(&mut self.document, state.document),
+            baseline: std::mem::replace(&mut self.baseline, state.baseline),
+        }
     }
 
     /// Applies entries in order, stopping at the first error.
@@ -439,6 +530,28 @@ mod tests {
                 found: 2
             })
         );
+    }
+
+    #[test]
+    fn the_baseline_holds_first_committed_states_and_follows_undo() -> Result<(), String> {
+        let node = |n: u8| Uuid::derive(cmd(n, create_node(0, 0)).idempotency_key, "command", "0");
+        let x = |h: &History, n: u8| h.baseline().nodes.get(&node(n)).map(|v| v.x.nanometers());
+        let mut h = History::new(genesis());
+        h.replay(&[entry(1, commit(vec![cmd(1, create_node(5, 0))]))])
+            .map_err(|e| e.to_string())?;
+        assert_eq!(x(&h, 1), Some(5));
+        // An undone commit leaves nothing in the baseline; redo brings it back.
+        h.replay(&[entry(2, Event::Undo)])
+            .map_err(|e| e.to_string())?;
+        assert_eq!(x(&h, 1), None);
+        h.replay(&[entry(3, Event::Redo)])
+            .map_err(|e| e.to_string())?;
+        assert_eq!(x(&h, 1), Some(5));
+        // A history started from a snapshot takes the snapshot as its baseline (Q-10).
+        let from = History::from_snapshot(h.snapshot());
+        assert_eq!(from.baseline(), h.document());
+        assert_eq!(x(&from, 1), Some(5));
+        Ok(())
     }
 
     #[test]
