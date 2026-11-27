@@ -374,9 +374,14 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: 2D rendering of walls, openings, slabs, occurrences and labels; pan and zoom with 64-bit transforms; snapping to the 1/16 in grid and to references; selection.
 - Done when: zooming from the whole building to 1/16 in shows no jitter at either extreme, and a drag yields a command whose value is a snapped integer.
 
-**T-203 Dimensions and missing parameters.** Spec 6.2, 7.4. Depends on T-202.
+**T-202b Draw walls.** Spec 3.1, 5.3, 6.1, 6.4; Q-78. Depends on T-202.
 
-- Build: add Distance constraints by selecting two references and typing a value with parser echo; highlight underconstrained and conflicting geometry; an interview panel listing required parameters with their proposed defaults.
+- Build: a plan-view wall tool. On first use in a project with no storey or datum, it adds a storey and an origin datum (one proposal). Clicks at snapped points (3.1, 5.3) draw axis-aligned walls, each a catalog wall with Proposed layers (6.4), chained into an open run or closed into a rectangle at the first point; the nodes take the snapped click positions as placeholders until dimensions drive them. Each drawn run is committed once the user confirms its echo in the app (DEC-10).
+- Done when: a user draws a closed rectangle of four walls in the app, every node coordinate committed is on the 1/16 in grid (tested from fractional pointer positions), and the walls join as an L at each corner (6.1).
+
+**T-203 Dimensions and missing parameters.** Spec 6.2, 7.4; Q-78. Depends on T-202b.
+
+- Build: add Distance constraints by selecting two references and typing a value with parser echo; highlight underconstrained and conflicting geometry; an interview panel listing required parameters with their proposed defaults. A dimension or parameter is committed once the user confirms its parser echo and proposal echo in the app (Q-78 (i), DEC-10); T-204 later routes these through its review panel. The interview panel groups walls with the same layer set, and a typed total thickness sets the core layer to the total less the non-core layers, keeping the reference line on the core center, through SetWallLayers with source UserStated for every wall in the group; each layer stays editable on its own (Q-78 (x)).
 - Done when: a user can build a rectangular room from four typed dimensions and a wall thickness, and a conflict names both constraints.
 
 **T-204 Proposal review.** Spec 8.3, 8.4, 9.4. Depends on T-202.
@@ -399,7 +404,7 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: a baseline snapshot; function tags; the ExistingConditionEdit flag on proposals; a diff view showing all three states.
 - Done when: editing an existing wall flags the proposal and shows the original value. Then gate G-5.
 
-**T-208 Usability pass.** Depends on T-203 to T-207 and gate G-5.
+**T-208 Usability pass.** Depends on T-202b, T-203 to T-207 and gate G-5.
 
 - Build: fix the top issues found at G-5 and add a first-run walkthrough.
 - Done when: a non-expert completes the shop slice without help, confirmed by you.
