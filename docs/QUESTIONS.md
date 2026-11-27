@@ -350,3 +350,21 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Options: (a) layers WALLS (new), WALLS-EXISTING, WALLS-DEMOLISHED (by function), OPENINGS (each opening's void through its wall, as a closed outline), SLABS, EQUIPMENT (every occurrence footprint), EQUIPMENT-LABELS (each label as text at the footprint center, 6 in high) and DIMENSIONS; every outline a closed LWPOLYLINE; numbers written with 8 decimals of an inch (0.254 nm steps, so every stored nanometer reads back exactly), computed in integer arithmetic; layer names in this plain form rather than an AIA standard; (b) AIA-style names (A-WALL, A-DOOR, A-GLAZ, A-FLOR, A-EQPM, A-EQPM-IDEN, A-ANNO-DIMS); (c) 6 decimals only.
 - Recommendation: (a), with layer names easy to change if the client's own drawings use a standard.
 - Answer: (a) plain layer names, 8 decimals (owner, 2026-11-26).
+
+## Q-54: The L-room fiducials (T-119, status: answered)
+- Context: 5.4 requires an asymmetric L-shaped room with labeled fiducials to pass in every exporter (S-3). The model has no fiducial entity, and the CLI-built fixtures/l-room arrives with T-121.
+- Options: (a) fiducials are Point datums: each is exported as an empty glTF node named after the datum, at the datum's (x, y) and the storey elevation; T-119's test builds the L-room in code (an L whose arms differ in length, fiducials at four corners, plus a raised marker box so Z and the sign of every axis are checked); T-121 rebuilds the same room through the CLI; (b) add a Fiducial entity with x, y, z.
+- Recommendation: (a). Datums already are named reference points, and the raised box covers Z.
+- Answer: (a), owner, 2026-11-26.
+
+## Q-55: What the GLB contains (T-119, status: answered)
+- Context: T-119 asks for one mesh per element in element-local coordinates with a node transform, glTF = (x, z, -y) in meters, meshes from walls, slabs, roofs and openings, and equipment as boxes or referenced models.
+- Options: (a) walls: the footprint extruded from base to top, split along the wall around each opening's void (below the sill and above the head stay solid), mitered ends kept; slabs: outline extruded down from the slab elevation by its thickness; ceilings too: outline extruded up from the ceiling elevation; roofs: the footprint grown by the overhangs, an inclined top through the high and low edge heights and a bottom one vertical thickness below, fascia not modeled yet; doors: a 1 3/4 in panel, windows: a 1/4 in pane, both centered in the wall's thickness and filling the void; plain openings: nothing; equipment: boxes from declared dimensions at the footprint and elevation, with an element type's model asset id kept in the node's extras for the Scene Package (T-120) to resolve; flat-shaded triangles with normals, no materials yet; each node named by the element's label or name with extras {id, kind}; element-local coordinates with the node translation at the element's lowest corner, so vertex data stays small and precise in 32-bit floats; (b) the same without ceilings or door and window fillers.
+- Recommendation: (a). It is what a walkable UE scene needs, and every piece is an exact extrusion of geometry the core already computes.
+- Answer: (a), owner, 2026-11-26.
+
+## Q-56: The Khronos glTF validator (T-119, status: answered)
+- Context: the Done when asks for no errors from the Khronos validator, or a note in DECISIONS.md if it is not installed. It is not installed; Node and npm are. The validator is published by KhronosGroup on npm as gltf-validator (Apache-2.0).
+- Options: (a) install gltf-validator with npm into a tools folder outside the Rust build (not a crate dependency), run it on the golden GLB, record the result in DECISIONS.md, and also check the GLB in tests with the `gltf` crate (MIT OR Apache-2.0, test-only) so CI checks structure on every push; (b) do not install it: record that in DECISIONS.md and rely on the `gltf` crate in tests.
+- Recommendation: (a). It answers the Done when exactly, and the `gltf` crate keeps a check running in CI.
+- Answer: (a), owner, 2026-11-26.

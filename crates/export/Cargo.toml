@@ -11,8 +11,10 @@ workspace = true
 
 [dev-dependencies]
 dxf = "0.6.2"
+gltf = { version = "1.4.1", default-features = false, features = ["names", "utils"] }
 insta = "1.49.0"
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [dependencies]
 archviz-core = { version = "0.1.0", path = "../core" }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }

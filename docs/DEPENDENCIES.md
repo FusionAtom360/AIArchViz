@@ -18,3 +18,5 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | archviz-core | (workspace) | GPL-3.0-or-later | archviz-export | The document model and geometry the DXF writer draws. |
 | dxf | 0.6.2 | MIT | archviz-export (dev) | Independent DXF reader that checks our writer output in tests (Q-51). Test-only; its 33 transitive crates pass cargo deny. |
 | insta, proptest | as above | as above | archviz-export (dev) | DXF golden file and number-format property test. |
+| serde_json | 1.0.154 (`std`) | MIT OR Apache-2.0 | archviz-export | Builds the GLB JSON chunk (T-119). |
+| gltf | 1.4.1 (default-features off, `names`, `utils`) | MIT OR Apache-2.0 | archviz-export (dev) | Independent glTF reader that checks the GLB writer in tests (Q-56). Test-only; pulls gltf-json and gltf-derive (MIT OR Apache-2.0) and their proc-macro crates, checked by cargo deny. |
