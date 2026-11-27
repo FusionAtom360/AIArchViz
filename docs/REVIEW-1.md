@@ -29,7 +29,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** a command-level test that rejects off-grid UserStated values with the nearest grid value.
 
 ### C-2: Phase 1 exit criteria are not met
-- **Status: open**, waiting only on the owner. Per Q-72 (a): T-191 done (`adf53d5`); gate G-4 passed on 2026-11-27; S-3 recorded as DEC-7 (draft). Left: the owner approves DEC-4 and DEC-7, then `phase-1` is tagged.
+- **Status: closed** (2026-11-27), per Q-72 (a): T-191 done (`adf53d5`), gate G-4 passed, S-1 (DEC-4) and S-3 (DEC-7) approved by the owner, S-7 in DEC-1. `phase-1` tagged.
 - **Where:** `docs/DECISIONS.md` (DEC-4 is `Status: draft`), `docs/PROGRESS.md` (T-122 and T-122b both end "Next: gate G-4"), `docs/SLICE.md` (G-4 is a checklist with no result).
 - **Plan:** "Exit: T-101 to T-122 done, gates G-2, G-3 and G-4 passed, and the results of S-1, S-3 and S-7 recorded in docs/DECISIONS.md."
 - **Status:**

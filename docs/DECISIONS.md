@@ -48,7 +48,7 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Evidence: the shop of gate G-2 (fixtures/shop, 15 walls, 9 constraints, 7 openings, 4 spaces and slabs, a ledger shed roof, 12 equipment boxes) was entered through the CLI and solved by `cargo xtask slice` with 0 conflicts, 0 violations and 102 Proposed values listed. The degrees-of-freedom report lists exactly 24 underconstrained classes, the 12 occurrences on X and on Y, each naming its member, because no dimension ties equipment to a wall (crates/cli/tests/fixtures.rs). A contradicting 1 in datum-to-wall distance produces one Conflict naming the new constraint and the existing one, residual exactly -1 in, and the commit is refused as BLOCKED (s1_shop_conflict_names_both_constraints). Entering the walls and constraints reversed, or rotated, gives a byte-identical solution (s1_shop_solution_is_order_independent), adding to T-106's shuffled-order property test.
 - Limits: the shop is axis-aligned with only Distance constraints and shared nodes; Equal, Align and Measured tolerances are covered by T-106 and T-120b tests, not by this plan.
 - Re-run after T-122b (2026-11-27): the shop now has one slab from its four spaces (DEC-5) and its extension walls follow the roof (DEC-6), created in one apply with it; `cargo xtask slice` reports 0 conflicts, 24 underconstrained classes, 0 violations and 92 Proposed values. Constraint ids moved with the reordered script, so the contradicting dimension's one Conflict now reports the existing constraint, residual +1 in (computed minus stated for the constraint reported), still naming both and refused as BLOCKED. Order independence still holds for the 12 walls created one per apply.
-- Status: draft
+- Status: approved (owner, Q-72, 2026-11-27)
 
 ## DEC-5: Slab outline from Spaces out to their walls' far faces
 - Date: 2026-11-27
@@ -86,4 +86,4 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
   - T-122b geometry: the floor is closed under every door; each slab reaches the walls' exterior faces; the shop roof starts at the east wall's exterior face; no roof shows through a wall or ceiling; no gap between the roof-following walls and the roof's underside: pass.
   - Walk: the shop walked in Play In Editor with nothing wrong noted: pass.
   - Screenshots: four (L-room exterior with its shed roof; L-room interior with door, window, ceiling and the marker box raised 36 in; shop from above with the extension; shop interior among the equipment boxes). They were reviewed on 2026-11-27 and the owner keeps them outside the repository. They are consistent with the fixtures: the shop's main block has no roof or ceiling, since only the extension is roofed (G-2).
-- Status: draft
+- Status: approved (owner, G-4, 2026-11-27)
