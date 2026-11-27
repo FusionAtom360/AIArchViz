@@ -292,6 +292,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: `propose` rejects a submitted command that carries a user-stated length off the 1/16 in grid, naming the argument and echoing the nearest grid value (half to even, as the parser does). User-stated means every `Sourced<Length>` with source `user_stated`, the length values of an AddConstraint with source `user_stated`, the value of a SetConstraintValue, the delta or target of a move, and declared dimensions with authority `user_stated_exact`. Commands that move resolution or defaults generate are not checked, nor are values with another source or authority (derived, measured, imported, proposed, manufacturer, CAD).
 - Done when: a test per command kind with a user-stated length shows an off-grid value rejected with the nearest grid value and an on-grid value accepted; a non-user-stated off-grid value is accepted; the CLI replay of the L-room with one constraint 1 nm off the grid fails with the nearest grid value and commits nothing.
 
+**T-191 L-room fiducials in the DXF.** Spec 5.4, 11.1, 14 (S-3); REVIEW-1 H-2, Q-72. Depends on T-190.
+
+- Build: the DXF writer puts each Point datum on a DATUMS layer as a POINT entity at the datum's position plus a TEXT entity holding its name, with coordinates in decimal inches like every other entity (DEC-1). Goldens regenerated with `cargo xtask golden`.
+- Done when: a test reads the L-room DXF back and finds F-A to F-D at (0, 0), (240, 0), (240, 96) and (0, 180) in inches, exact to the nanometer, each labeled with its name; the DATUMS layer carries the Normal plot style like the other layers (DEC-1); `cargo xtask slice` output is byte-identical across runs. After it: gate G-4, then DEC-7 records S-3 for DXF, glTF and UE, and the owner approves DEC-4 and DEC-7 (Q-72).
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.

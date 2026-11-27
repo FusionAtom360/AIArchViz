@@ -495,7 +495,7 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
 - Recommendation: (a). The four fixes share the goldens and are checked together at G-4.
 - Answer: (a) T-122b added to docs/PLAN.md before G-4 (owner, 2026-11-27).
 
-## Q-72: How to close REVIEW-1 C-2, the Phase 1 exit criteria (status: open)
+## Q-72: How to close REVIEW-1 C-2, the Phase 1 exit criteria (status: answered)
 - Context: the Phase 1 exit (PLAN section 6) needs T-101 to T-122 done, gates G-2, G-3 and G-4 passed, and S-1, S-3 and S-7 recorded in docs/DECISIONS.md. Spec 14 makes the Phase 1 exit "S-1, S-3 and S-7 pass for DXF and glTF". Where things stand:
   - G-2 and G-3 have passed, and S-7 is recorded (DEC-1).
   - S-1 is recorded as DEC-4, which is still a draft. Its first evidence line says 102 Proposed values. The T-122b re-run line below it gives the current 92.
@@ -512,4 +512,4 @@ Blocking or open ambiguities, each with options and a recommendation. Claude Cod
   - (b) Run G-4 now. Record S-3 for glTF and UE only, and defer S-3 for DXF to a later phase. This changes spec 14's Phase 1 exit, so it needs a DEC approved by the owner. AutoCAD registration was already checked against a drawing at G-3 (S-7), but on the shop, not on the L-room fiducials.
   - (c) As (a), but also check the DXF fiducials by hand in AutoCAD 2018 (ID command on each point) at a repeat of G-3. This adds an owner step and checks nothing the T-191 read-back test does not.
 - Recommendation: (a). It meets the exit criteria as written, needs no change to the spec, and keeps the DXF check automated. G-4 can run before or after T-191, because T-191 does not change the GLB. Running it after means only one regenerated slice to check.
-- Answer:
+- Answer: (a) (owner, 2026-11-27). T-191 added to docs/PLAN.md.

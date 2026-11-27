@@ -29,7 +29,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** a command-level test that rejects off-grid UserStated values with the nearest grid value.
 
 ### C-2: Phase 1 exit criteria are not met
-- **Status: open**, blocked on the owner (Q-72): gate G-4, approval of DEC-4 and an S-3 record, with H-2 needed for S-3 in DXF.
+- **Status: open**. Plan per Q-72 (a): T-191 (H-2), then the owner's gate G-4, then DEC-7 (S-3) drafted, then the owner approves DEC-4 and DEC-7, then `phase-1` is tagged.
 - **Where:** `docs/DECISIONS.md` (DEC-4 is `Status: draft`), `docs/PROGRESS.md` (T-122 and T-122b both end "Next: gate G-4"), `docs/SLICE.md` (G-4 is a checklist with no result).
 - **Plan:** "Exit: T-101 to T-122 done, gates G-2, G-3 and G-4 passed, and the results of S-1, S-3 and S-7 recorded in docs/DECISIONS.md."
 - **Status:**
@@ -53,6 +53,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** a validity test with node coordinates at the i64 limits.
 
 ### H-2: The DXF has no fiducials, so S-3 and the 5.4 conformance fixture are untested for DXF
+- **Status: open**, planned as T-191 (Q-72).
 - **Where:** `crates/export/src/dxf.rs:400` (`write_dxf`). No datums or fiducial points are written (no reference to datums anywhere in the file), and no test uses the L-room.
 - **Spec:**
   - 5.4: the L-room fixture "MUST pass in every exporter".
