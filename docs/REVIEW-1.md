@@ -29,7 +29,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** a command-level test that rejects off-grid UserStated values with the nearest grid value.
 
 ### C-2: Phase 1 exit criteria are not met
-- **Status: open**. Plan per Q-72 (a): T-191 (H-2), then the owner's gate G-4, then DEC-7 (S-3) drafted, then the owner approves DEC-4 and DEC-7, then `phase-1` is tagged.
+- **Status: open**, waiting only on the owner. Per Q-72 (a): T-191 done (`adf53d5`); gate G-4 passed on 2026-11-27; S-3 recorded as DEC-7 (draft). Left: the owner approves DEC-4 and DEC-7, then `phase-1` is tagged.
 - **Where:** `docs/DECISIONS.md` (DEC-4 is `Status: draft`), `docs/PROGRESS.md` (T-122 and T-122b both end "Next: gate G-4"), `docs/SLICE.md` (G-4 is a checklist with no result).
 - **Plan:** "Exit: T-101 to T-122 done, gates G-2, G-3 and G-4 passed, and the results of S-1, S-3 and S-7 recorded in docs/DECISIONS.md."
 - **Status:**
@@ -53,7 +53,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** a validity test with node coordinates at the i64 limits.
 
 ### H-2: The DXF has no fiducials, so S-3 and the 5.4 conformance fixture are untested for DXF
-- **Status: open**, planned as T-191 (Q-72).
+- **Status: closed** by T-191 (`adf53d5`, 2026-11-27). The DXF writes Point datums on a DATUMS layer; covered by `l_room_fiducials_read_back_from_the_dxf` and `l_room_dxf_fiducials_read_back_exactly`.
 - **Where:** `crates/export/src/dxf.rs:400` (`write_dxf`). No datums or fiducial points are written (no reference to datums anywhere in the file), and no test uses the L-room.
 - **Spec:**
   - 5.4: the L-room fixture "MUST pass in every exporter".

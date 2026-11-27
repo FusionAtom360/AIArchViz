@@ -69,3 +69,21 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
   - Such a wall's height becomes Derived, not Proposed.
 - Rationale: walls stay extruded 2D profiles (D-4), but this is a second non-flat exception next to the roof in 6.5. It closes the gaps between flat wall tops and a sloped roof, with one element per wall in the model, the DXF and UE.
 - Status: approved (owner, Q-69, 2026-11-27)
+
+## DEC-7: S-3 result and gate G-4, coordinates and handedness end to end
+- Date: 2026-11-27
+- Task or spike: S-3, gate G-4 (T-122, T-122b, T-191; Q-72)
+- Spec section: 5.4, 14
+- Decision: S-3 passes for DXF, glTF and UE. The L-room fiducials land where 5.4 puts them in every exporter and in the UE 5.8 editor, with no mirror or axis swap. Phase 1 needs no coordinate or unit change.
+- Evidence:
+  - DXF: `l_room_fiducials_read_back_from_the_dxf` (crates/export/src/dxf.rs) and `l_room_dxf_fiducials_read_back_exactly` (xtask/src/slice.rs, on the replayed fixtures/l-room output) read F-A to F-D back at (0, 0), (240, 0), (240, 96) and (0, 180) in, exact to the nanometer (T-191).
+  - glTF: `l_room_fiducials_land_at_the_expected_gltf_coordinates` (crates/export/src/gltf/tests.rs), glTF = (x, z, -y) in meters.
+  - UE: gate G-4, below.
+- G-4 (2026-11-27, owner, UE 5.8 editor): the `cargo xtask slice` GLBs were imported by hand with the default glTF import settings, at the origin with no rotation or scale. The GLBs are byte-identical before and after T-191: l-room.glb SHA-256 149c6f3ca9ac30b886a57131f48848d0535a67cb1ec014223ed39d732a0d686e, shop.glb 01320a60fc905688d4c86f0ff9a0f628466ad7e770bc60fcd49f50f6900843c4.
+  - L-room fiducials: F-A (0, 0, 0), F-B (609.6, 0, 0), F-C (609.6, -243.84, 0), F-D (0, -457.2, 0) cm, read exactly as expected: pass.
+  - Shop dimension: the north wall's exterior face measured 18'-0" (548.64 cm), exactly as expected: pass.
+  - Shading (Q-70): faces look flat-shaded with welded vertices and no normals, so the Q-70 (b) fallback is not needed: pass.
+  - T-122b geometry: the floor is closed under every door; each slab reaches the walls' exterior faces; the shop roof starts at the east wall's exterior face; no roof shows through a wall or ceiling; no gap between the roof-following walls and the roof's underside: pass.
+  - Walk: the shop walked in Play In Editor with nothing wrong noted: pass.
+  - Screenshots: four (L-room exterior with its shed roof; L-room interior with door, window, ceiling and the marker box raised 36 in; shop from above with the extension; shop interior among the equipment boxes). They were reviewed on 2026-11-27 and the owner keeps them outside the repository. They are consistent with the fixtures: the shop's main block has no roof or ceiling, since only the extension is roofed (G-2).
+- Status: draft

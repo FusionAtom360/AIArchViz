@@ -56,7 +56,7 @@ face), and that it overlays the client's drawing.
 
 ## Gate G-4: GLB in UE 5.8 (S-3)
 
-By hand, in a UE 5.8 editor project:
+Passed on 2026-11-27 (DEC-7). To repeat it, by hand, in a UE 5.8 editor project:
 
 1. Import `target/slice/l-room/l-room.glb` with the default glTF import settings and place it
    at the origin with no rotation or scale.
