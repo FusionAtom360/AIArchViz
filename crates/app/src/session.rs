@@ -367,7 +367,7 @@ mod plan_tests {
         assert_eq!(scene.pick(at, v.nm(6.0)), Some(Entity::Wall(w.id)));
         let drag = Drag::begin(&scene, Entity::Wall(w.id), at).unwrap_or_else(|| panic!());
         let preview = drag
-            .update(&scene, v.to_world(release), v.nm(8.0))
+            .update(&scene, v.to_world(release), v.nm(8.0), GRID_NM)
             .unwrap_or_else(|| panic!());
         let action = preview.action.unwrap_or_else(|| panic!("the wall moved"));
         let proposal = session
@@ -396,6 +396,7 @@ mod draw_tests {
     use crate::draw::tests::empty_project;
     use crate::draw::{Click, WallTool, run_commands, setup_actions, storey_for};
     use crate::scene::Scene;
+    use crate::snap::visible_step;
     use crate::viewport::{Screen, Viewport};
     use archviz_core::{Command, DatumGeometry, GRID_NM, JoinType, Length, Source, format_length};
 
@@ -442,7 +443,10 @@ mod draw_tests {
         // that sit between grid values.
         let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
         let mut v = Viewport::new((0, 0), 1.0 / 25_400_000.0, Screen { x: 640.0, y: 400.0 });
-        v.zoom_about(Screen { x: 611.3, y: 377.9 }, 0.173);
+        // About 1.37 px per inch: the visible step is 1 ft (Q-79).
+        v.zoom_about(Screen { x: 611.3, y: 377.9 }, 1.37);
+        let step = visible_step(v.scale());
+        assert_eq!(step, 304_800_000);
         let px = v.scale() * 304_800_000.0; // pixels per foot
         let o = v.to_screen((0, 0));
         let clicks = [
@@ -461,7 +465,7 @@ mod draw_tests {
                 at.0 % GRID_NM != 0 || at.1 % GRID_NM != 0,
                 "click {i} is off the grid"
             );
-            match tool.click(&scene, at, tolerance) {
+            match tool.click(&scene, at, tolerance, step) {
                 Click::Added => assert!(i < 4),
                 Click::Closed(r) => run = Some(r),
                 Click::Ignored(why) => panic!("click {i}: {why}"),
@@ -482,26 +486,21 @@ mod draw_tests {
         let doc = session.document();
         assert_eq!(doc.walls.len(), 4);
         assert_eq!(doc.nodes.len(), 4);
-        // A rectangle: two x values and two y values, the near corner on the
-        // origin datum (snapped to it) and the far one within a pixel of
-        // where the user clicked (at this zoom a pixel is about 6 in).
-        let xs: std::collections::BTreeSet<i64> =
-            doc.nodes.values().map(|n| n.x.nanometers()).collect();
-        let ys: std::collections::BTreeSet<i64> =
-            doc.nodes.values().map(|n| n.y.nanometers()).collect();
-        let (xs, ys): (Vec<i64>, Vec<i64>) = (xs.into_iter().collect(), ys.into_iter().collect());
-        assert_eq!((xs.len(), ys.len()), (2, 2), "{xs:?} {ys:?}");
-        assert_eq!((xs[0], ys[0]), (0, 0));
-        let pixel = v.nm(1.0);
-        assert!(
-            (xs[1] - 12 * 304_800_000).abs() <= pixel,
-            "{}",
-            format_length(Length::from_nanometers(xs[1]))
-        );
-        assert!(
-            (ys[1] - 10 * 304_800_000).abs() <= pixel,
-            "{}",
-            format_length(Length::from_nanometers(ys[1]))
+        // The clicks land on the 1 ft lines the user sees.
+        let mut corners: Vec<(String, String)> = doc
+            .nodes
+            .values()
+            .map(|n| (format_length(n.x), format_length(n.y)))
+            .collect();
+        corners.sort();
+        assert_eq!(
+            corners,
+            [
+                ("0'-0\"".to_string(), "0'-0\"".to_string()),
+                ("0'-0\"".to_string(), "10'-0\"".to_string()),
+                ("12'-0\"".to_string(), "0'-0\"".to_string()),
+                ("12'-0\"".to_string(), "10'-0\"".to_string()),
+            ]
         );
         for n in doc.nodes.values() {
             assert_eq!(n.x.nanometers() % GRID_NM, 0, "{n:?}");

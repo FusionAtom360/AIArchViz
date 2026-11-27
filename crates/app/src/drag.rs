@@ -114,10 +114,11 @@ impl Drag {
         }
     }
 
-    /// Where the reference goes with the pointer at `at`, snapping to the
-    /// grid or to a reference within `tolerance` nanometers. A free item
-    /// moves along the axis the pointer has moved farther on.
-    pub fn update(&self, scene: &Scene, at: World, tolerance: i64) -> Option<Preview> {
+    /// Where the reference goes with the pointer at `at`, snapping to a
+    /// reference within `tolerance` nanometers, else to a multiple of the
+    /// visible grid `step` (Q-79). A free item moves along the axis the
+    /// pointer has moved farther on.
+    pub fn update(&self, scene: &Scene, at: World, tolerance: i64, step: i64) -> Option<Preview> {
         let dx = i128::from(at.0) - i128::from(self.start.0);
         let dy = i128::from(at.1) - i128::from(self.start.1);
         let axis = self.axis.unwrap_or(if dy.abs() > dx.abs() {
@@ -131,7 +132,12 @@ impl Drag {
         };
         let from = on(axis, self.from);
         let raw = i64::try_from(i128::from(from) + d).ok()?;
-        let snap = snap(raw, &scene.references(axis, Some(self.entity)), tolerance);
+        let snap = snap(
+            raw,
+            &scene.references(axis, Some(self.entity)),
+            tolerance,
+            step,
+        );
         let delta = i64::try_from(i128::from(snap.value) - i128::from(from)).ok()?;
         let target = Motion::Target {
             target: archviz_core::Length::from_nanometers(snap.value),
@@ -188,7 +194,7 @@ impl IntoReference for WallSide {
 mod tests {
     use super::*;
     use crate::scene::tests::shop;
-    use crate::snap::SnapKind;
+    use crate::snap::{SnapKind, visible_step};
     use crate::viewport::{MAX_SCALE, Screen, Viewport};
     use archviz_core::{GRID_NM, reference_coordinate};
     use proptest::prelude::*;
@@ -225,7 +231,9 @@ mod tests {
             Axis::Y => (at.0, at.1 + raw),
             Axis::X => (at.0 + raw, at.1),
         };
-        let p = drag.update(&scene, to, 0).unwrap_or_else(|| panic!());
+        let p = drag
+            .update(&scene, to, 0, GRID_NM)
+            .unwrap_or_else(|| panic!());
         assert_eq!(p.snap.kind, SnapKind::Grid);
         let action = p.action.unwrap_or_else(|| panic!("moved"));
         let Action::MoveWall(m) = &action else {
@@ -246,7 +254,7 @@ mod tests {
         let o = &scene.occurrences[0];
         let drag =
             Drag::begin(&scene, Entity::Occurrence(o.id), o.center).unwrap_or_else(|| panic!());
-        let p = drag.update(&scene, (o.center.0 + 10, o.center.1), 0);
+        let p = drag.update(&scene, (o.center.0 + 10, o.center.1), 0, GRID_NM);
         if o.center.0 % GRID_NM == 0 {
             assert_eq!(p.map(|p| p.action), Some(None));
         }
@@ -273,7 +281,9 @@ mod tests {
             .cloned()
             .unwrap_or_else(|| panic!("references"));
         let to = (goal + 1000, o.center.1 + 10);
-        let p = drag.update(&scene, to, 5000).unwrap_or_else(|| panic!());
+        let p = drag
+            .update(&scene, to, 5000, GRID_NM)
+            .unwrap_or_else(|| panic!());
         assert_eq!(p.axis, Axis::X);
         assert_eq!(p.snap.kind, SnapKind::Reference(name));
         assert_eq!(motion_target(&p.action.unwrap_or_else(|| panic!())), goal);
@@ -303,10 +313,18 @@ mod tests {
             let end = v.to_world(Screen { x: to.0, y: to.1 });
             let drag = Drag::begin(&scene, entity, start);
             prop_assert!(drag.is_some());
-            let p = drag.and_then(|d| d.update(&scene, end, v.nm(6.0)));
+            let step = visible_step(v.scale());
+            let p = drag.and_then(|d| d.update(&scene, end, v.nm(6.0), step));
             prop_assert!(p.is_some());
-            if let Some(action) = p.and_then(|p| p.action) {
-                prop_assert_eq!(motion_target(&action) % GRID_NM, 0);
+            if let Some(p) = p {
+                // On the visible step, or on an on-grid reference (Q-79).
+                if p.snap.kind == SnapKind::Grid {
+                    prop_assert_eq!(p.snap.value % step, 0);
+                }
+                if let Some(action) = p.action {
+                    prop_assert_eq!(motion_target(&action) % GRID_NM, 0);
+                    prop_assert_eq!(motion_target(&action), p.snap.value);
+                }
             }
         }
     }

@@ -13,7 +13,7 @@ use eframe::egui::{
 use crate::drag::{Drag, Preview};
 use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
-use crate::snap::{SnapKind, to_grid};
+use crate::snap::{SnapKind, to_grid, visible_step};
 use crate::viewport::{Screen, Viewport, World, clip_polygon, clip_segment};
 
 /// Pixels within which the pointer picks an entity or snaps to a reference.
@@ -22,24 +22,6 @@ const SNAP_PX: f64 = 8.0;
 /// Pixels outside the canvas that clipped shapes extend to, so clip edges
 /// never show.
 const PAD: f64 = 64.0;
-/// Grid steps in nanometers, finest first: 1/16, 1/8, 1/4, 1/2, 1, 3, 6 in,
-/// 1, 2, 5, 10, 50, 100, 500 ft.
-const STEPS: [i64; 14] = [
-    1_587_500,
-    3_175_000,
-    6_350_000,
-    12_700_000,
-    25_400_000,
-    76_200_000,
-    152_400_000,
-    304_800_000,
-    609_600_000,
-    1_524_000_000,
-    3_048_000_000,
-    15_240_000_000,
-    30_480_000_000,
-    152_400_000_000,
-];
 
 /// What the widget reports to the app after a frame.
 pub enum Event {
@@ -184,10 +166,11 @@ impl PlanView {
             self.drag = None;
             self.preview = None;
             let tolerance = viewport.nm(SNAP_PX);
+            let step = visible_step(viewport.scale());
             if response.clicked_by(PointerButton::Primary)
                 && let Some(at) = at
             {
-                event = match tool.click(scene, at, tolerance) {
+                event = match tool.click(scene, at, tolerance, step) {
                     Click::Added => Event::None,
                     Click::Closed(run) => Event::Run(run),
                     Click::Ignored(why) => Event::Refused(why),
@@ -207,7 +190,9 @@ impl PlanView {
             if escape {
                 tool.cancel();
             }
-            self.next = self.pointer.map(|p| tool.next_point(scene, p, tolerance));
+            self.next = self
+                .pointer
+                .map(|p| tool.next_point(scene, p, tolerance, step));
         } else {
             self.next = None;
             event = self.select_and_drag(ui, &response, scene, &viewport, at);
@@ -245,7 +230,12 @@ impl PlanView {
         if let (Some(drag), Some(at)) = (&self.drag, at)
             && response.dragged_by(PointerButton::Primary)
         {
-            self.preview = drag.update(scene, at, viewport.nm(SNAP_PX));
+            self.preview = drag.update(
+                scene,
+                at,
+                viewport.nm(SNAP_PX),
+                visible_step(viewport.scale()),
+            );
         }
         if response.drag_stopped_by(PointerButton::Primary) {
             if let Some(action) = self.preview.take().and_then(|p| p.action) {
@@ -286,12 +276,9 @@ impl PlanView {
         let accent = Color32::from_rgb(0, 140, 255);
         let font = FontId::proportional(12.0);
 
-        // Grid: the finest listed step at least 12 px apart.
-        if let Some(step) = STEPS
-            .iter()
-            .copied()
-            .find(|s| (*s as f64) * v.scale() >= 12.0)
+        // Grid: the step a click snaps to (Q-79).
         {
+            let step = visible_step(v.scale());
             let a = v.to_world(screen(rect.left_top()));
             let b = v.to_world(screen(rect.right_bottom()));
             let line = |p: World, q: World| {

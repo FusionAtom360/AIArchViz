@@ -379,6 +379,11 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: a plan-view wall tool. On first use in a project with no storey or datum, it adds a storey and an origin datum (one proposal). Clicks at snapped points (3.1, 5.3) draw axis-aligned walls, each a catalog wall with Proposed layers (6.4), chained into an open run or closed into a rectangle at the first point; the nodes take the snapped click positions as placeholders until dimensions drive them. Each drawn run is committed once the user confirms its echo in the app (DEC-10).
 - Done when: a user draws a closed rectangle of four walls in the app, every node coordinate committed is on the 1/16 in grid (tested from fractional pointer positions), and the walls join as an L at each corner (6.1).
 
+**T-202c Snap to the visible grid.** Spec 3.1, 5.3; Q-79. Depends on T-202b.
+
+- Build: the plan-view grid steps are powers of 2 of the inch up to 1 in (1/16, 1/8, 1/4, 1/2, 1 in), then 3 in and 6 in (1/4 and 1/2 ft), then powers of 2 of the foot (1 ft to 2048 ft), so a step at least 12 px apart exists at every zoom. Wall-tool clicks and drags snap to the step drawn at the current zoom, an on-grid reference within 8 px still winning (Q-79 (a)).
+- Done when: every snapped value is a multiple of the visible step or an on-grid reference, and every step is a multiple of 1/16 in (tested at every zoom from fractional pointer positions).
+
 **T-203 Dimensions and missing parameters.** Spec 6.2, 7.4; Q-78. Depends on T-202b.
 
 - Build: add Distance constraints by selecting two references and typing a value with parser echo; highlight underconstrained and conflicting geometry; an interview panel listing required parameters with their proposed defaults. A dimension or parameter is committed once the user confirms its parser echo and proposal echo in the app (Q-78 (i), DEC-10); T-204 later routes these through its review panel. The interview panel groups walls with the same layer set, and a typed total thickness sets the core layer to the total less the non-core layers, keeping the reference line on the core center, through SetWallLayers with source UserStated for every wall in the group; each layer stays editable on its own (Q-78 (x)).

@@ -83,15 +83,15 @@ impl WallTool {
 
     /// Where a click at `at` would place the next point: snapped to an
     /// on-grid reference within `tolerance` nanometers (the scene's, or a
-    /// point of this run), else to the grid, and after the first point
-    /// moved along one axis only.
-    pub fn next_point(&self, scene: &Scene, at: World, tolerance: i64) -> World {
+    /// point of this run), else to a multiple of the visible grid `step`
+    /// (Q-79), and after the first point moved along one axis only.
+    pub fn next_point(&self, scene: &Scene, at: World, tolerance: i64, step: i64) -> World {
         let snapped = |axis: Axis| {
             let mut refs = scene.references(axis, None);
             for (i, p) in self.points.iter().enumerate() {
                 refs.push((on(axis, *p), format!("run point {}", i + 1)));
             }
-            snap(on(axis, at), &refs, tolerance).value
+            snap(on(axis, at), &refs, tolerance, step).value
         };
         match self.points.last() {
             None => (snapped(Axis::X), snapped(Axis::Y)),
@@ -108,8 +108,8 @@ impl WallTool {
     }
 
     /// Places the next point for a click at `at` (see `next_point`).
-    pub fn click(&mut self, scene: &Scene, at: World, tolerance: i64) -> Click {
-        let p = self.next_point(scene, at, tolerance);
+    pub fn click(&mut self, scene: &Scene, at: World, tolerance: i64, step: i64) -> Click {
+        let p = self.next_point(scene, at, tolerance, step);
         let Some(&last) = self.points.last() else {
             self.points.push(p);
             return Click::Added;
@@ -264,6 +264,7 @@ pub fn run_commands(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::snap::visible_step;
     use crate::viewport::{Screen, Viewport};
     use archviz_core::{GRID_NM, Source};
     use proptest::prelude::*;
@@ -309,7 +310,7 @@ pub(crate) mod tests {
     fn the_first_point_snaps_on_both_axes() {
         let mut t = WallTool::new();
         assert_eq!(
-            t.click(&empty(), (G * 10 + G / 3, -G * 4 - 2), 0),
+            t.click(&empty(), (G * 10 + G / 3, -G * 4 - 2), 0, G),
             Click::Added
         );
         assert_eq!(t.points(), &[(G * 10, -G * 4)]);
@@ -318,13 +319,13 @@ pub(crate) mod tests {
     #[test]
     fn later_points_move_along_the_dominant_axis() {
         let mut t = WallTool::new();
-        t.click(&empty(), (0, 0), 0);
+        t.click(&empty(), (0, 0), 0, G);
         assert_eq!(
-            t.next_point(&empty(), (10 * FT + 7, FT + 3), 0),
+            t.next_point(&empty(), (10 * FT + 7, FT + 3), 0, G),
             (10 * FT, 0)
         );
         assert_eq!(
-            t.next_point(&empty(), (FT + 3, -10 * FT - 7), 0),
+            t.next_point(&empty(), (FT + 3, -10 * FT - 7), 0, G),
             (0, -10 * FT)
         );
     }
@@ -333,11 +334,11 @@ pub(crate) mod tests {
     fn a_point_snaps_to_an_earlier_point_of_the_run() {
         let mut t = WallTool::new();
         for p in [(0, 0), (10 * FT, 0), (10 * FT, 8 * FT)] {
-            t.click(&empty(), p, 0);
+            t.click(&empty(), p, 0, G);
         }
         // Back west, landing a few grid steps short of the start's x.
         assert_eq!(
-            t.next_point(&empty(), (5 * G, 8 * FT + 9), 8 * G),
+            t.next_point(&empty(), (5 * G, 8 * FT + 9), 8 * G, G),
             (0, 8 * FT)
         );
     }
@@ -346,9 +347,9 @@ pub(crate) mod tests {
     fn clicking_the_first_point_closes_a_rectangle() {
         let mut t = WallTool::new();
         for p in [(0, 0), (10 * FT, 0), (10 * FT, 8 * FT), (0, 8 * FT)] {
-            assert_eq!(t.click(&empty(), p, 0), Click::Added);
+            assert_eq!(t.click(&empty(), p, 0, G), Click::Added);
         }
-        let Click::Closed(run) = t.click(&empty(), (100, 100), 0) else {
+        let Click::Closed(run) = t.click(&empty(), (100, 100), 0, G) else {
             panic!("not closed")
         };
         assert!(run.closed);
@@ -359,37 +360,37 @@ pub(crate) mod tests {
     #[test]
     fn refused_clicks() {
         let mut t = WallTool::new();
-        t.click(&empty(), (0, 0), 0);
+        t.click(&empty(), (0, 0), 0, G);
         assert_eq!(
-            t.click(&empty(), (100, 0), 0),
+            t.click(&empty(), (100, 0), 0, G),
             Click::Ignored("a wall needs a length")
         );
-        t.click(&empty(), (10 * FT, 0), 0);
+        t.click(&empty(), (10 * FT, 0), 0, G);
         assert_eq!(
-            t.click(&empty(), (5 * FT, 0), 0),
+            t.click(&empty(), (5 * FT, 0), 0, G),
             Click::Ignored("a wall cannot double back on the one before it")
         );
         // With two points, the first point is a double-back, never a close.
         assert_eq!(
-            t.click(&empty(), (0, 0), 0),
+            t.click(&empty(), (0, 0), 0, G),
             Click::Ignored("a wall cannot double back on the one before it")
         );
-        t.click(&empty(), (10 * FT, 5 * FT), 0);
-        t.click(&empty(), (20 * FT, 5 * FT), 0);
-        t.click(&empty(), (20 * FT, 0), 0);
+        t.click(&empty(), (10 * FT, 5 * FT), 0, G);
+        t.click(&empty(), (20 * FT, 5 * FT), 0, G);
+        t.click(&empty(), (20 * FT, 0), 0, G);
         // Closing from (20 ft, 0) runs -X straight back along the +X first wall.
         assert_eq!(
-            t.click(&empty(), (0, 0), 0),
+            t.click(&empty(), (0, 0), 0, G),
             Click::Ignored("the last wall cannot double back on the first")
         );
         let mut u = WallTool::new();
         for p in [(0, 0), (10 * FT, 0), (10 * FT, 5 * FT), (5 * FT, 5 * FT)] {
-            u.click(&empty(), p, 0);
+            u.click(&empty(), p, 0, G);
         }
-        u.click(&empty(), (5 * FT, -5 * FT), 0);
-        assert_eq!(u.click(&empty(), (10 * FT, -5 * FT), 0), Click::Added);
+        u.click(&empty(), (5 * FT, -5 * FT), 0, G);
+        assert_eq!(u.click(&empty(), (10 * FT, -5 * FT), 0, G), Click::Added);
         assert_eq!(
-            u.click(&empty(), (10 * FT, 0), 0),
+            u.click(&empty(), (10 * FT, 0), 0, G),
             Click::Ignored("the run already has a point there")
         );
     }
@@ -397,11 +398,11 @@ pub(crate) mod tests {
     #[test]
     fn finishing_leaves_an_open_run() {
         let mut t = WallTool::new();
-        t.click(&empty(), (0, 0), 0);
+        t.click(&empty(), (0, 0), 0, G);
         assert_eq!(t.finish(), None, "one point is no wall");
         assert_eq!(t.points().len(), 1);
-        t.click(&empty(), (6 * FT, 0), 0);
-        t.click(&empty(), (6 * FT, 4 * FT), 0);
+        t.click(&empty(), (6 * FT, 0), 0, G);
+        t.click(&empty(), (6 * FT, 4 * FT), 0, G);
         let run = t.finish().unwrap_or_else(|| panic!());
         assert!(!run.closed);
         let commands =
@@ -501,9 +502,23 @@ pub(crate) mod tests {
         assert_eq!(setup_actions(&doc).len(), 1, "only the storey");
     }
 
+    #[test]
+    fn zoomed_out_a_click_lands_on_the_visible_step() {
+        // 1 px = 1 in: the visible step is 1 ft.
+        let step = visible_step(1.0 / 25_400_000.0);
+        assert_eq!(step, FT);
+        let mut t = WallTool::new();
+        t.click(&empty(), (5 * 25_400_000 + 3, -7 * 25_400_000), 0, step);
+        assert_eq!(t.points(), &[(0, -FT)]);
+        assert_eq!(
+            t.next_point(&empty(), (12 * FT + 5 * 25_400_000 + 7, -FT + 9), 0, step),
+            (12 * FT, -FT)
+        );
+    }
+
     proptest! {
         /// From any fractional pointer positions at any zoom, every point
-        /// the tool places is on the 1/16 in grid and every segment is
+        /// the tool places is on the visible grid step and every segment is
         /// axis-aligned.
         #[test]
         fn every_point_is_on_the_grid(
@@ -513,18 +528,22 @@ pub(crate) mod tests {
             snap_px in 0.0_f64..12.0,
         ) {
             let v = Viewport::new(center, scale, Screen { x: 640.0, y: 400.0 });
+            let step = visible_step(v.scale());
             let mut t = WallTool::new();
             let mut placed = Vec::new();
             for (x, y) in clicks {
                 let at = v.to_world(Screen { x, y });
-                if let Click::Closed(run) = t.click(&empty(), at, v.nm(snap_px)) {
+                if let Click::Closed(run) = t.click(&empty(), at, v.nm(snap_px), step) {
                     placed.extend(run.points);
                 }
                 placed.extend_from_slice(t.points());
             }
+            // With no scene references, every point is on the visible step
+            // (Q-79), and so on the 1/16 in grid.
+            prop_assert_eq!(step.rem_euclid(G), 0);
             for p in &placed {
-                prop_assert_eq!(p.0.rem_euclid(G), 0);
-                prop_assert_eq!(p.1.rem_euclid(G), 0);
+                prop_assert_eq!(p.0.rem_euclid(step), 0);
+                prop_assert_eq!(p.1.rem_euclid(step), 0);
             }
             for w in t.points().windows(2) {
                 prop_assert!(heading(w[0], w[1]).is_some());
