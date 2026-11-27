@@ -62,20 +62,39 @@ fn lock(dir: &Path) -> Result<File, CliError> {
     }
 }
 
-/// Creates a new project folder with `genesis` and an empty log.
+/// Creates a new project folder with `genesis` and an empty log. The lock is
+/// taken before anything is checked, and neither file is ever replaced: a
+/// folder that holds either one already holds a project (REVIEW-1 H-4).
 pub fn create(dir: &Path, genesis: &Document) -> Result<(), CliError> {
-    if dir.join(GENESIS).exists() {
-        return Err(CliError::new(
-            ErrorCode::ProjectExists,
-            format!("{} already holds a project", dir.display()),
-        ));
-    }
     std::fs::create_dir_all(dir).map_err(io)?;
     let _lock = lock(dir)?;
+    let exists = || {
+        CliError::new(
+            ErrorCode::ProjectExists,
+            format!("{} already holds a project", dir.display()),
+        )
+    };
+    for name in [GENESIS, LOG] {
+        if std::fs::exists(dir.join(name)).map_err(io)? {
+            return Err(exists());
+        }
+    }
     let text = to_canonical_json(genesis)
         .map_err(|e| CliError::new(ErrorCode::CommandFailed, e.to_string()))?;
-    std::fs::write(dir.join(GENESIS), text).map_err(io)?;
-    std::fs::write(dir.join(LOG), "").map_err(io)?;
+    let create_new = |name: &str| {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(name))
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => exists(),
+                _ => io(e),
+            })
+    };
+    create_new(GENESIS)?
+        .write_all(text.as_bytes())
+        .map_err(io)?;
+    create_new(LOG)?;
     Ok(())
 }
 
@@ -135,7 +154,68 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
-    use super::committed;
+    use super::{GENESIS, LOG, committed, create};
+    use crate::ErrorCode;
+    use archviz_core::{
+        Building, Document, Project as ProjectInfo, ProjectUnit, Uuid, from_canonical_json,
+    };
+
+    fn genesis(i: u8) -> Document {
+        Document::new(
+            ProjectInfo {
+                id: Uuid::from_bytes([i; 16]),
+                name: format!("P{i}"),
+                default_unit: ProjectUnit::Inches,
+            },
+            Building {
+                id: Uuid::from_bytes([i.wrapping_add(100); 16]),
+                name: format!("B{i}"),
+            },
+        )
+    }
+
+    /// T-194 (REVIEW-1 H-4): threads racing `create` on one folder leave
+    /// exactly one project, the winner's, with an empty log; every loser
+    /// gets PROJECT_EXISTS or LOCKED.
+    #[test]
+    fn racing_creates_leave_exactly_one_project() {
+        for round in 0..200 {
+            let dir = std::env::temp_dir().join(format!(
+                "archviz-create-race-{round}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+            let racers: Vec<_> = (0..8u8)
+                .map(|i| {
+                    let dir = dir.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        (i, create(&dir, &genesis(i)))
+                    })
+                })
+                .collect();
+            let mut winners = Vec::new();
+            for racer in racers {
+                let (i, result) = racer.join().unwrap_or_else(|_| panic!("racer panicked"));
+                match result {
+                    Ok(()) => winners.push(i),
+                    Err(e) => assert!(
+                        matches!(e.code, ErrorCode::ProjectExists | ErrorCode::Locked),
+                        "round {round} racer {i}: {e:?}"
+                    ),
+                }
+            }
+            assert_eq!(winners.len(), 1, "round {round}: winners {winners:?}");
+            let text = std::fs::read_to_string(dir.join(GENESIS)).unwrap_or_default();
+            let on_disk = from_canonical_json(&text).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(on_disk, genesis(winners[0]), "round {round}");
+            let log = std::fs::read(dir.join(LOG)).unwrap_or_else(|e| panic!("{e}"));
+            assert!(log.is_empty(), "round {round}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 
     #[test]
     fn the_committed_part_ends_at_the_last_newline() {

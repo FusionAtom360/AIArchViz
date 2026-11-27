@@ -409,3 +409,69 @@ fn a_bad_complete_line_is_still_a_corrupt_project() {
     }
     let _ = std::fs::remove_dir_all(&full);
 }
+
+/// T-194 (REVIEW-1 H-4): `new` against a folder whose genesis.json is gone
+/// but whose log still has entries must not wipe the log.
+#[test]
+fn new_never_overwrites_an_existing_log() {
+    let dir = replay("l-room", "new-over-log");
+    let log = log_of(&dir);
+    assert!(!log.is_empty());
+    let request = r#"{"name":"Other","building":"Other"}"#;
+
+    let (out, status) = archviz("new", &dir, request);
+    assert_eq!(status, 4, "existing project: {out}");
+    assert_eq!(out["error"]["code"], json!("PROJECT_EXISTS"), "{out}");
+    assert_eq!(log_of(&dir), log);
+
+    std::fs::remove_file(dir.join("genesis.json")).unwrap_or_else(|e| panic!("{e}"));
+    let (out, status) = archviz("new", &dir, request);
+    assert_eq!(status, 4, "log without genesis: {out}");
+    assert_eq!(out["error"]["code"], json!("PROJECT_EXISTS"), "{out}");
+    assert_eq!(log_of(&dir), log, "new truncated the log");
+    assert!(!dir.join("genesis.json").exists(), "new wrote a genesis");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// T-194: concurrent `new` calls on one empty folder leave exactly one
+/// project, the winner's, with an empty log.
+#[test]
+fn racing_new_calls_leave_exactly_one_project() {
+    for round in 0..5 {
+        let dir =
+            std::env::temp_dir().join(format!("archviz-new-race-{round}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let racers: Vec<_> = (0..8)
+            .map(|i| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    let request = format!(
+                        r#"{{"name":"P{i}","building":"B{i}","project_id":"00000000-0000-4000-8000-{i:012}","building_id":"00000000-0000-4000-9000-{i:012}"}}"#
+                    );
+                    (i, archviz("new", &dir, &request))
+                })
+            })
+            .collect();
+        let mut winners = Vec::new();
+        for racer in racers {
+            let (i, (out, status)) = racer.join().unwrap_or_else(|_| panic!("racer panicked"));
+            match status {
+                0 => winners.push(i),
+                4 | 5 => {
+                    let code = &out["error"]["code"];
+                    assert!(
+                        *code == json!("PROJECT_EXISTS") || *code == json!("LOCKED"),
+                        "{out}"
+                    );
+                }
+                _ => panic!("round {round} racer {i}: {out}"),
+            }
+        }
+        assert_eq!(winners.len(), 1, "round {round}: winners {winners:?}");
+        let winner = winners[0];
+        let doc = query(&dir);
+        assert_eq!(doc["project"]["name"], json!(format!("P{winner}")), "{doc}");
+        assert!(log_of(&dir).is_empty(), "round {round}: log not empty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

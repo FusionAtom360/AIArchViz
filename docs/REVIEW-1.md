@@ -73,7 +73,7 @@ Determinism held in every experiment below. The worst problems are (1) the 5.3 g
 - **Missing test:** crash-consistency of the log on disk.
 
 ### H-4: `new` can wipe an existing log (check-then-lock race)
-- **Status: open**, planned as T-194.
+- **Status: closed** by T-194 (2026-11-27). `create` locks before checking, refuses a folder holding genesis.json or log.jsonl, and creates both with create-new; covered by `new_never_overwrites_an_existing_log`, `racing_creates_leave_exactly_one_project` and `racing_new_calls_leave_exactly_one_project`.
 - **Where:** `crates/cli/src/store.rs:51-62`.
   - Line 51 checks for `genesis.json` before line 58 takes the lock.
   - After taking the lock it does not check again.
