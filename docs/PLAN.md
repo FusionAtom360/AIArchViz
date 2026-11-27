@@ -297,6 +297,11 @@ Phase 1 builds the exact core and ends with a vertical slice of the client's sho
 - Build: the DXF writer puts each Point datum on a DATUMS layer as a POINT entity at the datum's position plus a TEXT entity holding its name, with coordinates in decimal inches like every other entity (DEC-1). Goldens regenerated with `cargo xtask golden`.
 - Done when: a test reads the L-room DXF back and finds F-A to F-D at (0, 0), (240, 0), (240, 96) and (0, 180) in inches, exact to the nanometer, each labeled with its name; the DATUMS layer carries the Normal plot style like the other layers (DEC-1); `cargo xtask slice` output is byte-identical across runs. After it: gate G-4, then DEC-7 records S-3 for DXF, glTF and UE, and the owner approves DEC-4 and DEC-7 (Q-72).
 
+**T-192 Checked arithmetic in the wall-length check.** Spec 5.1, 7.7; REVIEW-1 H-1. Depends on T-191.
+
+- Build: the wall-length invariant in `validate` computes the along and across offsets between a wall's nodes with checked i64 subtraction, and a difference that does not fit returns `GeometryError::Overflow` instead of panicking or wrapping, as the rest of the function already does.
+- Done when: a validity test with node coordinates at the i64 limits (along and across) gets `Err(GeometryError::Overflow)` in debug and release builds, with no violation computed from a wrapped value; the existing wall-length tests still pass.
+
 ## 7. Phase 2: App
 
 Phase 2 puts the command API behind an egui app so a non-expert can enter measurements, review proposals and verify dimensions without the command line. Exit: T-201 to T-208 done and gate G-5 passed.
