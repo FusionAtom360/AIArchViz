@@ -117,3 +117,11 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - Decision: proposals carry the canonical echo text (T-199e). Explicit confirmation of that text is built in the app in Phase 2. The CLI `apply` keeps proposing and committing in one call, and no interactive CLI prompt is built; scripts, fixtures and harnesses that want a confirmation step use `propose` then `commit`.
 - Rationale: the CLI is driven by scripts and fixtures, where a prompt would block; the propose and commit pair already lets a caller confirm the echo before committing.
 - Status: approved (owner, Q-74, 2026-11-27)
+
+## DEC-11: The inverse delta restores values, not provenance or acknowledgments
+- Date: 2026-11-27
+- Task or spike: T-197 (Q-75)
+- Spec section: 13.2, 8.4
+- Decision: the inverse of a committed MoveWall, MoveOpening or MoveOccurrence is the same move (same reference, axis, edit and absorb) by minus the displacement measured in the document before the commit, and the inverse of a SetConstraintValue sets the prior value. Committing a command and then its inverse gives a byte-identical document when the offsets the command moves are UserStated and the document holds no acknowledgments. Otherwise two differences remain: an offset that was Measured, Proposed or Imported comes back with its old value but as UserStated, because a move states the dimension (Q-39); and an acknowledgment pruned because the command cleared its violation does not come back, so the inverse brings the violation back unacknowledged and its proposal is blocked (Q-35). An inverse that brings back an unacknowledged violation the command fixed, such as the overlap a clearance_resolve push fixed, is blocked in the same way, though its resolved commands restore the document byte for byte. Undo (8.4) is the exact restore in every case. The inverse of a value that was off the 1/16 in grid is itself off the grid and is refused by the grid rule (5.3) like any user-stated value.
+- Rationale: it changes no command or log format and keeps Q-39; the differences are provenance and acknowledgment bookkeeping, not geometry, and stored-state undo already restores them exactly.
+- Status: approved (owner, Q-75, 2026-11-27)

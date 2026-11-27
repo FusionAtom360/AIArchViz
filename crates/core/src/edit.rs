@@ -470,15 +470,35 @@ fn edge_id(g: &AxisGraph, i: usize) -> Option<Uuid> {
     }
 }
 
-/// Resolves a move into edits (8.7).
-pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutcome, MoveError> {
-    let g = axis_graph(doc, req.axis).map_err(MoveError::Solve)?;
+/// The signed distance the moved reference travels, and its variable.
+fn displacement_on(
+    doc: &Document,
+    g: &AxisGraph,
+    req: &MoveRequest,
+) -> Result<(usize, i128), MoveError> {
     let (rv, rc) = resolve_reference(doc, &req.reference, req.axis).map_err(MoveError::Solve)?;
     let current = g.values.get(rv).copied().unwrap_or(0) + rc;
     let delta = match req.motion {
         Motion::Delta { delta } => i128::from(delta.nanometers()),
         Motion::Target { target } => i128::from(target.nanometers()) - current,
     };
+    Ok((rv, delta))
+}
+
+/// The signed distance a move takes its reference along its axis in `doc`
+/// (a target becomes the delta to reach it), as `resolve_move` measures it.
+pub(crate) fn displacement(doc: &Document, req: &MoveRequest) -> Result<Length, MoveError> {
+    let g = axis_graph(doc, req.axis).map_err(MoveError::Solve)?;
+    let (_, delta) = displacement_on(doc, &g, req)?;
+    i64::try_from(delta)
+        .map(Length::from_nanometers)
+        .map_err(|_| MoveError::Overflow)
+}
+
+/// Resolves a move into edits (8.7).
+pub(crate) fn resolve_move(doc: &Document, req: &MoveRequest) -> Result<MoveOutcome, MoveError> {
+    let g = axis_graph(doc, req.axis).map_err(MoveError::Solve)?;
+    let (rv, delta) = displacement_on(doc, &g, req)?;
     let delta_len = Length::from_nanometers(i64::try_from(delta).map_err(|_| MoveError::Overflow)?);
     let c = contract(&g);
     let r = c.group[rv];
