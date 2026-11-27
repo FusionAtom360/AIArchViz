@@ -2,7 +2,7 @@
 
 Nov 26, 2026 · @Joseph
 
-Claude Code builds the System in six phases and 58 tasks, one task per session, with 11 human gates where only you can verify or decide.
+Claude Code builds the System in six phases and 81 tasks, one task per session, with 14 human gates where only you can verify or decide.
 
 ## 1. How to use this plan
 
@@ -123,7 +123,7 @@ Review phase $ARGUMENTS as an adversarial reviewer with no stake in the code. Fi
 
 ## 4. Human gates
 
-Eleven points need something only you can do: a licensed program, hardware, a secret, or a judgment. Claude Code stops at each one and waits for your report.
+Fourteen points need something only you can do: a licensed program, hardware, a secret, or a judgment. Claude Code stops at each one and waits for your report.
 
 | Gate | Before or after | You do | Report back |
 | --- | --- | --- | --- |
@@ -138,6 +138,9 @@ Eleven points need something only you can do: a licensed program, hardware, a se
 | G-9 | Before T-503 | Provide one real STEP file of a machine and its manufacturer dimensions. | Files and source URL |
 | G-10 | During T-505 | Run the mesh generator benchmark on an NVIDIA machine. | Timings, VRAM, quality notes |
 | G-11 | During T-408 | Install on the client machine with the installer and have the client reproduce the first use case. | Acceptance notes and issues |
+| G-12 | Before T-511 | Provide one material from your purchased library with its physical tile size and its license terms. The material counterpart of G-9. | Files, tile size and source |
+| G-13 | After T-513 | Look at the textured materials in the packaged UE build. | Scale against a known dimension, visible seams, overall look; screenshots |
+| G-14 | During T-515 | Run the material generator benchmark on an NVIDIA machine (can share a sitting with G-10), and provide a photo of a real surface in the shop with one known dimension. The material counterpart of G-10. | Timings, VRAM, quality notes, the photo and its dimension |
 
 ## 5. Phase 0: Bootstrap
 
@@ -491,11 +494,22 @@ Phase 4 proves runtime ingest first, then builds the loader, interaction and ins
 
 ## 10. Phase 5: Assets, operators and IFC
 
-Phase 5 adds real equipment models, finishing operators and IFC export; once T-501 is done, the other tasks are independent and can run in any order. Exit: T-501 to T-508 done and gates G-9 and G-10 passed.
+Phase 5 adds real equipment models and materials, finishing operators and IFC export. Materials follow the same pipeline as models (spec 10), and each material task mirrors a model task:
+
+| Step | Models | Materials |
+| --- | --- | --- |
+| Model, authority and normalization | T-501 | T-509 |
+| Parametric fallback | T-502 templates | T-510 Proxy materials |
+| Converters | T-503 (gate G-9) | T-511 (gate G-12) |
+| Into the Scene Package and UE | T-119, T-120, T-404 (earlier phases) | T-512, T-513 (gate G-13) |
+| Acquisition tools | T-504 | T-514 |
+| Generator adapter | T-505 (gate G-10, S-6) | T-515 (gate G-14, S-8) |
+
+T-501 runs first. After it, the model tasks, the material tasks (in the order of the table, each after its model counterpart where it says so), T-506 and T-507 can run in any order. T-508 runs last. Exit: T-501 to T-515 done and gates G-9, G-10, G-12, G-13 and G-14 passed.
 
 **T-501 Asset model and normalization.** Spec 10.1, 10.2, 10.4. Depends on T-111.
 
-- Build: fidelity tiers; declared\_dimensions with source; license classes (Unknown is blocked unless the user overrides with a recorded note); provenance; normalization where uniform scale is free, non-uniform scale up to 2% is logged, and anything beyond is rejected or downgraded to Proxy; a Scene Package validator that rejects a model variant whose footprint differs from its slot owner beyond the tolerance.
+- Build: fidelity tiers; declared\_dimensions with source; license classes (Unknown is blocked unless the user overrides with a recorded note); packaging permission, with export falling back to the Proxy box and listing the item in Proposed items when a model may not be packaged; provenance; normalization where uniform scale is free, non-uniform scale up to 2% is logged, and anything beyond is rejected or downgraded to Proxy; a Scene Package validator that rejects a model variant whose footprint differs from its slot owner beyond the tolerance.
 - Done when: there is a test for each rule.
 
 **T-502 Parametric templates.** Spec 10.1. Depends on T-501.
@@ -528,7 +542,42 @@ Phase 5 adds real equipment models, finishing operators and IFC export; once T-5
 - Build: an IFC4 writer for walls with material layer set usage, openings, doors, windows, spaces, furniture proxies, property sets, and GlobalIds from D-12.
 - Done when: the file opens without errors in a free viewer (name the viewer in docs/DECISIONS.md) and entity counts match the document.
 
-**T-508 Hardening and documentation.** Depends on every task above.
+**T-509 Material model and normalization.** Spec 6, 10, 10.1, 10.2, 10.4. Depends on T-501. Mirrors T-501.
+
+- Build: Material gains fidelity, tile\_size with source and D-11 authority (library-published ranks as measured), texture\_set\_ref, license class, packaging permission and provenance, through the same types T-501 uses for models; an Asset kind texture\_set whose maps each record kind, content hash, pixel size and color space; normalization where a pixel aspect within 2% of the tile aspect is logged and anything beyond is rejected or downgraded to Proxy (base color = the mean of the base color map, supplied by T-511); a missing tile size is a Proposed value; the Scene Package validator rejects a texture set whose maps differ in pixel size or carry the wrong color space for their kind.
+- Done when: there is a test for each rule, each beside its T-501 counterpart where one exists.
+
+**T-510 Proxy materials.** Spec 10.1. Depends on T-509. Mirrors T-502.
+
+- Build: a Proxy form (base color, roughness, metallic) for every catalog material, created on first use as catalog materials are today; scene.json `materials` entries carrying Proxy values; every material slot resolves.
+- Done when: every material slot in the shop and L-room fixtures resolves to a material whose values equal the declared ones exactly, and the Scene Package golden files are regenerated and reviewed.
+
+**T-511 Texture converter.** Spec 10.3, 10.5, D-10. Depends on T-509, T-503 and gate G-12. Mirrors T-503.
+
+- Build: a texture conversion process in crates/converters under the T-503 job-object limits, plus caps on pixel count and decoded size: decode PNG and JPEG, resize to a power of two within the 4096 px budget, convert DirectX normal maps to OpenGL and log it, compute the mean base color and a seam score on opposite edges; outputs stored by content hash and re-validated by core; a local-folder import that records license class and a source note per material, for your purchased library.
+- Done when: your material from gate G-12 normalizes to its declared tile size with its aspect within 2%; a DirectX normal map converts to the expected pixels; a malformed image, an oversized image and a decompression bomb are each reported as a failed import without freezing the app.
+
+**T-512 Textures in the Scene Package.** Spec 10.4, 11.3. Depends on T-510, T-511.
+
+- Build: the Scene Package writer copies texture files byte for byte into assets/textures/ named by content hash, lists them in manifest.sha256, and writes their paths by map kind into scene.json `materials`; a material whose texture set may not be packaged is written in its Proxy form and listed in Proposed items with the reason; schemas/scene.schema.json updated.
+- Done when: the same document gives identical bytes on repeat; the schema validates the output; manifest hashes verify; a CC0 fixture material with a 12 in by 24 in tile appears with that size in nanometers; a non-packageable material appears as Proxy and in Proposed items.
+
+**T-513 Textured materials in UE.** Spec 12.3, 12.4. Depends on T-512, T-405.
+
+- Build: the plugin loads textures from the package at runtime in the packaged build and feeds them to the T-404 world-aligned master material with the tile size from scene.json; Generated materials and Proxy fallbacks appear in the on-screen Proposed list; material variant slots cycle textured options.
+- Done when: an Unreal automation test shows exactly one texture repeat per 24 in on a test wall with a 24 in tile; cycling a material slot writes the expected selections.json; then gate G-13.
+
+**T-514 Material acquisition tools.** Spec 9.1, 9.6, 10.3, 10.4. Depends on T-511, T-504. Mirrors T-504.
+
+- Build: search\_materials and fetch\_material on the T-504 allowlist, per-domain approval and request\_purchase; adapters for one or two CC0 libraries with public APIs, chosen after checking their terms (record the choice in docs/DECISIONS.md); search lists CC0 results before paid ones; a library-published physical size becomes tile\_size, otherwise the tile size is Proposed; names and descriptions marked untrusted; validation of every download through T-511 before it enters the library.
+- Done when: injection tests pass, including instructions hidden in a material name and description; a fetched CC0 material enters the library with its license and source URL; a material with no published size cannot be committed until the user confirms its tile size; a purchase can never complete without a user action.
+
+**T-515 Material generator adapter.** Spec 10.6, D-18, S-8. Depends on T-511 and gate G-14. Mirrors T-505.
+
+- Build: an adapter interface shared in shape with T-505; a local runner for the model chosen after researching and benchmarking candidates whose licenses permit commercial use of their output, on an NVIDIA GPU under Windows or WSL2; a hosted-adapter stub; two input modes, a photo of a real sample plus one known dimension, and a text prompt plus a stated tile size; output marked fidelity Generated with model id and version, seed and input hash recorded; output passes T-511.
+- Done when: docs/DECISIONS.md holds a benchmark table (time, VRAM, seam score, quality, license), and your photo from gate G-14 with its known dimension yields a material whose tile size equals that dimension exactly.
+
+**T-508 Hardening and documentation.** Depends on every other Phase 5 task; runs last.
 
 - Build: a 500-element performance test covering solve, export and load; a non-technical user guide for the client with screenshots; a developer README.
 - Done when: the budgets recorded in docs/DECISIONS.md are met and you have reviewed the documents.
@@ -546,10 +595,10 @@ After the last task of each phase, a fresh /review-phase session audits the work
 
 **Release checklist for v1**
 
-- [ ] Every task is in docs/PROGRESS.md and every gate G-1 to G-11 has a recorded outcome.
+- [ ] Every task is in docs/PROGRESS.md and every gate G-1 to G-14 has a recorded outcome.
 - [ ] `cargo xtask check` is green on a fresh clone.
 - [ ] `cargo deny check` is clean and docs/DEPENDENCIES.md is complete.
-- [ ] Spikes S-1 to S-7 have results in docs/DECISIONS.md.
+- [ ] Spikes S-1 to S-8 have results in docs/DECISIONS.md.
 - [ ] Every item in spec section 17 is verified and recorded in docs/DECISIONS.md.
 - [ ] Two exports of the shop fixture on two different machines are byte-identical.
 - [ ] The installer is tested on the client machine and the client's acceptance is recorded.

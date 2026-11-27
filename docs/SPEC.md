@@ -1,6 +1,6 @@
 # Parametric Floor Plan to Architectural Visualization System: High-Level Design and Specification
 
-Draft 0.3 | November 26, 2026 | Status: owner answers incorporated and adversarial review applied (section 18). Items marked OPEN need an owner decision.
+Draft 0.4 | November 27, 2026 | Status: owner answers incorporated and adversarial review applied (section 18); material sourcing and generation added on the asset model (Q-16). Items marked OPEN need an owner decision.
 
 ## 1. Purpose and scope
 
@@ -34,7 +34,7 @@ Keywords MUST, SHOULD and MAY follow RFC 2119. IDs: D-n decisions, S-n spikes, Q
 - **C3 mcp.** MCP server over stdio exposing the tool set in section 9.
 - **C4 agent.** Built-in agent loop with provider adapters, calling the same tools in-process.
 - **C5 app.** 2D editor, measurement-capable 3D viewer, proposal review. A client of the same command API as C2 to C4, with no business logic of its own. UI technology is egui (D-14).
-- **C6 converters.** Optional external headless processes (CAD and mesh conversion, mesh generation, Blender cleanup).
+- **C6 converters.** Optional external headless processes (CAD and mesh conversion, texture conversion, mesh and material generation, Blender cleanup).
 - **C7 ue-bridge.** UE5 C++ plugin and content that consume the Scene Package and provide runtime interaction.
 
 ```
@@ -72,7 +72,7 @@ C6 converters <-> asset pipeline <-> C1 core
 - **D-15 Unreal target.** UE 5.8 as a packaged build. Epic describes 5.8 as the last planned major UE5 release, which makes it a stable pin. All runtime behavior is C++ or Blueprint (12.2).
 - **D-16 CAD interchange.** The client uses AutoCAD 2018. DXF output MUST open there without repair prompts and register at correct scale (11.1).
 - **D-17 Agent provider.** OpenAI first. The AgentBackend interface stays provider-neutral; other adapters follow after v1.
-- **D-18 Mesh generation.** Local open-weights models by default, with a hosted service as an optional adapter (10.6).
+- **D-18 Mesh and material generation.** Local open-weights models by default, with a hosted service as an optional adapter (10.6). Materials are sourced and generated on the same model as 3D assets (section 10, Q-16).
 - **D-19 License.** The System (C1 to C6) is GPL-licensed (GPLv3; the owner delivers a working product to the client and publishes the source). C7, the UE plugin, MUST NOT link against C1 and communicates only through the Scene Package, because Unreal Engine's license is not expected to be GPL-compatible (confirm against the Epic EULA). All dependencies MUST be GPL-compatible. C7 is licensed MIT (owner decision; the rest of the System is GPLv3) so that its linkage with Unreal Engine is unambiguous; it shares no code with C1, only the Scene Package specification.
 - **D-20 Existing conditions.** Editable by the client with the same commands and constraints as new work (6.7).
 - **D-21 Roof.** The parametric shed roof is in v1, because the first use case needs it (6.5).
@@ -84,7 +84,7 @@ C6 converters <-> asset pipeline <-> C1 core
 
 **5.1 Length.** Stored as i64 nanometers (1 in = 25,400,000). Add, subtract and integer multiply are exact. Division and rational scaling use i128 intermediates and round half to even to the nearest nanometer. Inch fractions finer than 1/64 in are rounded on input with the error reported.
 
-**5.2 Input parsing.** The parser MUST accept forms such as 10'-4 1/2", 10 ft 4.5 in, 124.5in. A bare number uses the project default unit. The UI and agent MUST echo every parsed value in canonical feet-inches-fraction form before commit. Metric forms are accepted only in asset specification fields.
+**5.2 Input parsing.** The parser MUST accept forms such as 10'-4 1/2", 10 ft 4.5 in, 124.5in. A bare number uses the project default unit. The UI and agent MUST echo every parsed value in canonical feet-inches-fraction form before commit. Metric forms are accepted only in asset specification fields (declared dimensions and tile sizes, 10.2).
 
 **5.3 Display.** All lengths display in feet, inches and fractions to the nearest 1/16 in. A stored value that is not exactly on the 1/16 in grid (for example a derived midpoint or a converted metric dimension) displays with a leading \~, and its exact value is shown on inspection and in reports. Display rounding NEVER alters stored values. User-stated inputs MUST lie on the 1/16 in grid: finer input is rejected and the nearest grid value is echoed for confirmation. Derived values and converted manufacturer or CAD dimensions are exempt.
 
@@ -109,7 +109,8 @@ C6 converters <-> asset pipeline <-> C1 core
 | Feature | none | operator id and version, parameters, targets, derived children |
 | Constraint | IfcConstraint (weak) | kind, references, value, tolerance, status, provenance |
 | VariantSlot | none | owner, kind (material, model, lighting), options, selected |
-| Asset | IfcDocumentReference | content hash, source URL, license, fidelity, converter log |
+| Material | IfcMaterial | name, fidelity, tile\_size (authority per 10.2), texture\_set\_ref (Asset of kind texture\_set) or Proxy parameters (base color, roughness, metallic), properties, source, license |
+| Asset | IfcDocumentReference | kind (model, texture\_set), content hash, source URL, license, packaging permission, fidelity, converter log |
 
 **6.1 Wall geometry.** Direction is node\_a to node\_b. Left is 90 degrees counterclockwise in plan. Layers are ordered left to right. left\_extent is the distance from the reference line to the left face; right\_extent is total thickness minus left\_extent. Joins: at a node with two walls, an L join is mitered; at three or more, the wall with the lowest join\_priority runs through and others butt; free ends are square. Rules are deterministic and independent of creation order.
 
@@ -175,8 +176,11 @@ C6 converters <-> asset pipeline <-> C1 core
 | commit\_proposal, undo, redo | T2 | Section 8.4 |
 | apply\_operator | T1 | Wraps ApplyOperator in a proposal |
 | export\_dxf, export\_scene\_package, push\_to\_ue | T2 | File output |
-| search\_assets, fetch\_asset | T3 | Section 10 |
-| request\_purchase | T4 | Section 10.4 |
+| search\_assets, fetch\_asset | T3 | Section 10, models |
+| search\_materials, fetch\_material | T3 | Section 10, texture sets |
+| request\_purchase | T4 | Section 10.4, models and materials |
+
+Mesh and material generation (10.6) are started from the app and have no agent tool.
 
 **9.2 Ambiguity protocol.** An ambiguity is {kind, candidates\[\], default if any}. Kinds: Referent (which object), Direction, Magnitude, ReferenceSemantics (which face or center), PolicyChoice. The agent MUST NOT commit a proposal containing unresolved Referent, Direction or ReferenceSemantics ambiguities; it MUST ask the user. PolicyChoice ambiguities may be committed only as Proposed values after user review. Approximate quantities (about, roughly, a bit, a couple) are Magnitude ambiguities: the agent MUST propose one specific value flagged Proposed and MUST NOT commit it silently.
 
@@ -186,25 +190,31 @@ C6 converters <-> asset pipeline <-> C1 core
 
 **9.5 Backends.** (a) The MCP server (C3), stdio by default; an HTTP listener, if added, binds to 127.0.0.1 with a bearer token. (b) The built-in agent (C4) behind an AgentBackend interface with provider adapters (first adapter: OpenAI, D-17; more adapters after v1). API keys are stored in Windows Credential Manager, never in the project file. The System ships no billing. It MUST disclose that scene summaries are sent to the chosen provider.
 
-**9.6 Security.** All tool inputs are validated against JSON schemas. No tool executes shell commands or arbitrary code. File paths resolve inside the project directory. Content fetched from the web is untrusted data: it is never executed, and any tool call whose justification originates in fetched content and which escalates tier requires explicit user confirmation. T3 uses an allowlist plus per-domain user approval. The System never holds payment credentials. Strings stored in the project that originated outside it (asset names, source page titles, imported notes) are also untrusted: tool outputs mark them as untrusted data, and they never appear in tool descriptions or system instructions.
+**9.6 Security.** All tool inputs are validated against JSON schemas. No tool executes shell commands or arbitrary code. File paths resolve inside the project directory. Content fetched from the web is untrusted data: it is never executed, and any tool call whose justification originates in fetched content and which escalates tier requires explicit user confirmation. T3 uses an allowlist plus per-domain user approval. The System never holds payment credentials. Strings stored in the project that originated outside it (asset and material names and descriptions, source page titles, imported notes) are also untrusted: tool outputs mark them as untrusted data, and they never appear in tool descriptions or system instructions.
 
-**9.7 Evaluation.** A versioned evaluation set of at least 100 natural-language requests with expected resolved commands or expected clarifying questions. v1 acceptance: at least 95% of cases correct in a majority of runs, at least 85% correct in every run, and zero commits with unresolved Referent or Direction ambiguities in any run. Results are recorded per provider and per pinned model identifier; changing either re-runs the set. Every case runs at least five times, and the report states the fraction of cases whose runs all produced identical resolved commands. The set is split into a development half used for tuning and a held-out half used for acceptance, and it includes adversarial cases: ambiguous referents, approximate quantities, mirrored views, and instructions embedded in asset names.
+**9.7 Evaluation.** A versioned evaluation set of at least 100 natural-language requests with expected resolved commands or expected clarifying questions. v1 acceptance: at least 95% of cases correct in a majority of runs, at least 85% correct in every run, and zero commits with unresolved Referent or Direction ambiguities in any run. Results are recorded per provider and per pinned model identifier; changing either re-runs the set. Every case runs at least five times, and the report states the fraction of cases whose runs all produced identical resolved commands. The set is split into a development half used for tuning and a held-out half used for acceptance, and it includes adversarial cases: ambiguous referents, approximate quantities, mirrored views, and instructions embedded in asset and material names.
 
 **9.8 Context budget.** Every tool result is bounded (default 8 KB, paginated) and uses a compact canonical form: labels, types and dimensions, with no coordinates the task does not need. get\_scene\_summary returns counts and a region index, not every entity; find\_entities supports region, type, label and nearest-to-selection queries. A 500-element project MUST be workable within a 32K-token agent context.
 
 ## 10. Asset acquisition
 
-**10.1 Fidelity tiers.** Exact (manufacturer CAD), Library (licensed model), Generated (approximate mesh), Proxy (parametric box or template). Fidelity is stored and shown in the UI and exports; Generated assets are visibly marked.
+An Asset is one of two kinds. A model is a mesh that an ElementType references (model\_ref). A texture set is the image maps a Material references (texture\_set\_ref): base color (sRGB), normal (linear, OpenGL convention as in glTF), roughness, metallic and ambient occlusion (linear), and optionally height (linear). Both kinds follow the same rules: one fidelity scale, an authoritative declared dimension, one pipeline, one license and spend model, sandboxed converters and optional generators. Each subsection below states its rule for both kinds.
 
-**10.2 Dimension authority.** declared\_dimensions come from the user or a cited manufacturer spec. A mesh is normalized so its bounding box matches declared dimensions. Uniform scale is applied freely. Non-uniform scale up to 2% is permitted and logged; beyond 2% the asset is rejected or downgraded to Proxy.
+**10.1 Fidelity tiers.** Exact (manufacturer CAD; for a material, a manufacturer-supplied texture set with a stated physical size), Library (licensed model or material), Generated (approximate mesh or texture set from a generator), Proxy (parametric box or template; for a material, parametric base color, roughness and metallic values with no textures). Fidelity is stored and shown in the UI and exports; Generated assets are visibly marked. Every element type can fall back to its Proxy box and every material to its Proxy values, so every occurrence and material slot always resolves.
 
-**10.3 Pipeline.** Discover, user review, acquire, validate (format, size limit, triangle budget default 100,000, units, pivot), normalize, record provenance, add to library. Sources: user-provided CAD (STEP, DXF blocks, glTF), licensed libraries, manufacturer downloads, photos plus specs processed by a mesh generator (local open-weights models by default, a hosted service as an optional adapter; D-18).
+**10.2 Dimension authority.** For a model, declared\_dimensions are the declared dimension; for a material, tile\_size is: the physical width and height of one texture repeat. Declared dimensions come from the user or a cited manufacturer spec; a tile size comes from the user, a cited manufacturer spec, or the physical size a library publishes for the material, which ranks as measured in D-11. Neither is inferred by the agent: a missing value is a Proposed value under 9.2 and is confirmed by the user before commit. A mesh is normalized so its bounding box matches declared dimensions; a texture set is normalized so one repeat spans the tile size. Uniform scale is applied freely. Non-uniform scale (for a texture set, a pixel aspect different from the tile aspect) up to 2% is permitted and logged; beyond 2% the asset is rejected or downgraded to Proxy. A material downgraded to Proxy takes the mean of its base color map as its base color.
 
-**10.4 Licensing and spend.** Each asset records a license class: PublicDomain/CC0, Attribution, Commercial (purchased), Restricted, Unknown. Unknown is blocked unless the user overrides with a recorded note. Any purchase requires user approval showing price, seller and license, and is limited by a per-project cap; checkout is performed by the user, not the System. Generating meshes from manufacturer photos has copyright implications; the System records source URLs and warns that use is the user's responsibility.
+**10.3 Pipeline.** Discover, user review, acquire, validate, normalize, record provenance, add to library. Validation for a model: format, size limit, triangle budget default 100,000, units, pivot. Validation for a texture set: format (PNG or JPEG), size limit, resolution budget default 4096 px per side (maps are resized to a power of two), one pixel size shared by all maps, color space by map kind, normal-map convention (DirectX maps are converted to OpenGL and the conversion is logged), and a seam check on opposite edges whose failure is a warning the user may accept. Sources, for both kinds: user-provided files (for models STEP, DXF blocks and glTF; for materials texture files, including a library the user already owns, imported from a local folder), licensed libraries (search lists CC0 sources before paid ones; paid sources are sites on the T3 allowlist), manufacturer downloads, and photos plus specs processed by a generator (10.6; local open-weights models by default, a hosted service as an optional adapter; D-18).
 
-**10.5 Converters.** STEP to mesh through an OpenCascade-based CLI; mesh cleanup through headless Blender; both are discovered through configuration with pinned versions, invoked with fixed argument templates (no shell interpolation), and their outputs are re-validated by C1. Converters process untrusted files, so each run uses a restricted working directory, no network access, and time and memory limits (a Windows job object or equivalent); a crash or timeout is reported as a failed import.
+**10.4 Licensing and spend.** Each asset records a license class: PublicDomain/CC0, Attribution, Commercial (purchased), Restricted, Unknown. Unknown is blocked unless the user overrides with a recorded note. Commercial assets bought outside the System, such as an existing purchased material library, are imported with class Commercial and a recorded note of where they were bought; the System does not verify the purchase. Any purchase requires user approval showing price, seller and license, and is limited by a per-project cap; checkout is performed by the user, not the System. Each asset also records whether its license permits including its files in a delivered Scene Package. When it does not, or this is unknown, export uses the Proxy form of the element type or material and lists it in the Proposed-items list with the reason. Fixtures and golden files use only CC0 or System-generated assets, because the source is published (D-19). Generating meshes or materials from manufacturer photos has copyright implications; the System records source URLs and warns that use is the user's responsibility.
 
-**10.6 Mesh generators.** Local candidates, with licenses as their repositories listed them in November 2026 (verify before adoption): TRELLIS (MIT), TripoSR (MIT), Stable Fast 3D (Stability AI Community License), Hunyuan3D-2 (Tencent Community License, territorially restricted). Quality and hardware needs vary widely; one repository reports TRELLIS.2 running on NVIDIA under Linux only. A mid-range client GPU (Q-7) may not run the higher-fidelity models, so generation is an optional external process (C6) that may run on the developer's machine or through a hosted adapter, never a runtime dependency of the System. Generators redraw the source image, so output has fidelity Generated, takes its dimensions from 10.2, and carries a visible mark. Spike S-6 selects the default generator.
+**10.5 Converters.** STEP to mesh through an OpenCascade-based CLI; mesh cleanup through headless Blender; texture conversion (decoding, resizing, normal-map convention, seam check) through a converter process with caps on pixel count and decoded size. All are discovered through configuration with pinned versions, invoked with fixed argument templates (no shell interpolation), and their outputs are re-validated by C1. Converters process untrusted files, so each run uses a restricted working directory, no network access, and time and memory limits (a Windows job object or equivalent); a crash or timeout is reported as a failed import.
+
+**10.6 Generators.** Generation is an optional external process (C6) that may run on the developer's machine or through a hosted adapter, never a runtime dependency of the System. A hosted adapter sends its input to the provider, which is a T3 network call with the data-egress disclosure of 9.5, and any charge is T4. Generators redraw the source image, so output has fidelity Generated, takes its declared dimension from 10.2, carries a visible mark, and records the model id and version, the seed and the hash of its input as provenance.
+
+*Mesh generators.* Input: a photo plus declared dimensions. Local candidates, with licenses as their repositories listed them in November 2026 (verify before adoption): TRELLIS (MIT), TripoSR (MIT), Stable Fast 3D (Stability AI Community License), Hunyuan3D-2 (Tencent Community License, territorially restricted). Quality and hardware needs vary widely; one repository reports TRELLIS.2 running on NVIDIA under Linux only. A mid-range client GPU (Q-7) may not run the higher-fidelity models. Spike S-6 selects the default mesh generator.
+
+*Material generators.* Input, in order of preference: a photo of a real sample plus one known dimension of it, which sets tile\_size; or a text prompt, with tile\_size stated by the user (a default is a Proposed value). Candidates are chosen and their licenses verified before adoption; a model whose license restricts commercial use of its output is excluded, because output is delivered to a client. Spike S-8 selects the default material generator.
 
 ## 11. Exports and the Scene Package
 
@@ -212,7 +222,7 @@ C6 converters <-> asset pipeline <-> C1 core
 
 **11.2 IFC (v1.x).** IFC4 with IfcWall and layer set usage, openings, doors, windows, spaces, furniture proxies, property sets, GlobalIds from D-12. Acceptance: opens without errors in a free viewer.
 
-**11.3 Scene Package.** A folder or zip containing scene.json, assets/\*.glb, and manifest.sha256. scene.json declares schema\_version, unit (integer nanometers), coordinate system, storeys, elements with ids, labels, transforms, footprints (used for collision), material slots, variant slots and options, lights (type, lumens, color temperature, optional IES reference) and a Proposed-items list. Each mesh is authored in element-local coordinates and placed by transform to preserve float precision. The package is deterministic: same document yields identical bytes.
+**11.3 Scene Package.** A folder or zip containing scene.json, assets/\*.glb, assets/textures/\*, and manifest.sha256. scene.json declares schema\_version, unit (integer nanometers), coordinate system, storeys, elements with ids, labels, transforms, footprints (used for collision), material slots, materials (id, name, fidelity, tile size in nanometers, and either Proxy values or texture paths by map kind), variant slots and options, lights (type, lumens, color temperature, optional IES reference) and a Proposed-items list. Each mesh is authored in element-local coordinates and placed by transform to preserve float precision. Model and texture files are named by content hash and copied byte for byte from the project library, subject to the packaging permission of 10.4. The package is deterministic: same document yields identical bytes.
 
 ## 12. Unreal Engine runtime
 
@@ -222,7 +232,7 @@ C6 converters <-> asset pipeline <-> C1 core
 
 **12.3 Interaction.** Every entity with a variant slot is tagged with its id. The player looks at an entity and presses the interact key (default E) to cycle its options (materials, lighting presets, pre-imported model variants). A model variant in a slot MUST share the owner's declared footprint within the tolerance in 10.2. A swap to a different footprint is not a variant but a SetType command in the document followed by clearance checks, and it is not offered in the UE interaction. Model variants beyond those present in the package require regeneration. Selections are written to selections.json and imported by C1 as SetVariantSelection commands so the document stays authoritative.
 
-**12.4 Rendering rules.** Materials use world-aligned mapping with tile size in real-world units. Lights from scene.json are physical (lumens, Kelvin, optional IES). Lighting presets are variant slots. Provisional state is shown by an on-screen list of Proposed items.
+**12.4 Rendering rules.** Materials use world-aligned mapping with tile size in real-world units taken from scene.json. Lights from scene.json are physical (lumens, Kelvin, optional IES). Lighting presets are variant slots. Provisional state is shown by an on-screen list of Proposed items, which also lists Generated models and materials and anything exported in its Proxy form because of packaging permission (10.4).
 
 **12.5 Updates.** v1 uses full reload. v1.x adds an authenticated local channel (127.0.0.1) that applies diffs by stable id. Target reload time and limits are set in S-2.
 
@@ -245,12 +255,13 @@ C6 converters <-> asset pipeline <-> C1 core
 | S-5 | Is the agent reliable on resolution? | 9.7 thresholds met on the first 100 cases |
 | S-6 | Which local mesh generator runs acceptably on the client machine class? | A chosen model produces a usable mesh from a manufacturer photo within 0.5% of declared dimensions after normalization, in an accepted time, on 16-32 GB RAM and a mid-range GPU |
 | S-7 | Does the DXF open correctly in AutoCAD 2018? | No repair prompt; units read as inches at 1/16 in precision; a known wall dimension reads exactly; the plan overlays on a client drawing with correct registration |
+| S-8 | Which local material generator runs acceptably on the client machine class? | A chosen model produces a texture set from a photo of a real surface with one known dimension that passes the seam check and has a tile size equal to that dimension after normalization, in an accepted time, on 16-32 GB RAM and a mid-range GPU |
 
 - **Phase 1.** C1, C2, shed roof template, DXF and glTF export, command log, evaluation harness. Exit: S-1, S-3 and S-7 pass for DXF and glTF.
 - **Phase 2.** C5 viewer and 2D editor, proposal review, measurement tools. Exit: first use case modeled by a non-expert.
 - **Phase 3.** C3, C4 and the tool set. Exit: S-5.
 - **Phase 4.** C7 and the Scene Package in UE. Exit: S-2 and S-3 in UE.
-- **Phase 5.** Asset pipeline, operators, IFC export. Phase 6 (v2): IFC import, Layer B, roofs.
+- **Phase 5.** Asset pipeline for models and materials, operators, IFC export. Phase 6 (v2): IFC import, Layer B, roofs.
 
 **Vertical slice first.** The first deliverable, inside Phase 1, is a thin end-to-end run of the client's shop: constraints entered from the paper plan, walls, openings, slab, shed roof, equipment as parametric boxes, a dimensioned DXF opened in AutoCAD 2018, and the glTF imported by hand into a UE 5.8 editor scene and walked. This retires the client's core need and the coordinate and unit risks (S-3, S-7) before the viewer, agent and plugin exist. S-1 runs on the client's real plan, and S-2 starts in parallel as a time-boxed experiment.
 
@@ -262,7 +273,7 @@ C6 converters <-> asset pipeline <-> C1 core
 | --- | --- |
 | Existing building is not square or the client's measurements conflict | Calibrated underlay and transcribed dimensions from the paper plan (6.6), a field verification list, conflict protocol 7.5 |
 | UE runtime import fragility | Spike S-2; editor-mode fallback; plugin-built collision |
-| Asset accuracy and licensing | Declared dimensions authoritative; fidelity tiers; license classes |
+| Asset accuracy and licensing | Declared dimensions and tile sizes authoritative; fidelity tiers; license classes; packaging permission with Proxy fallback at export |
 | Agent misreads references or directions | Ambiguity protocol, echo rule, evaluation set |
 | Scope growth ('any scenario') | Section 1.4 limits; Layer B deferred |
 | LLM provider outage or cost | P7: full manual path; bring-your-own key |
@@ -273,7 +284,7 @@ C6 converters <-> asset pipeline <-> C1 core
 | Scope exceeds one developer | Vertical slice first; defer IFC, hosted generators and operators beyond the v1 list; MCP before the built-in agent |
 | Hostile input through assets and web content | Untrusted-data rules (9.6), sandboxed converters (10.5), T3 and T4 approvals |
 
-**Pivot triggers.** (1) S-1 fails on the client's real plan with Layer A: bring Layer B forward, or adopt a mature solver behind the D-6 trait (D-23). (2) S-2 fails for every ingest path: adopt the repackaging fallback and reconsider the promise that the client never touches UE. (3) S-5 stays below target after two tuning rounds: agent proposals always require UI confirmation and the agent is limited to the tools that passed. (4) S-6 finds no generator usable on the client GPU: use a hosted adapter, or Proxy-only assets in v1.
+**Pivot triggers.** (1) S-1 fails on the client's real plan with Layer A: bring Layer B forward, or adopt a mature solver behind the D-6 trait (D-23). (2) S-2 fails for every ingest path: adopt the repackaging fallback and reconsider the promise that the client never touches UE. (3) S-5 stays below target after two tuning rounds: agent proposals always require UI confirmation and the agent is limited to the tools that passed. (4) S-6 (meshes) or S-8 (materials) finds no generator usable on the client GPU: use a hosted adapter, or no Generated assets of that kind in v1.
 
 ## 16. Resolved questions
 
@@ -294,6 +305,7 @@ C6 converters <-> asset pipeline <-> C1 core
 | Q-13 GPL version | GPLv3; will deliver a working product to the client's machine and publish the source | D-19 |
 | Q-14 Delivery | Whichever is best practice; probably an installer | Windows installer; packaging method chosen in Phase 4 |
 | Q-15 Client GPU | NVIDIA | S-6 evaluates NVIDIA models on Windows, including WSL2 for models that are Linux-only |
+| Q-16 Material sourcing | Handle materials like 3D assets: find them in libraries or generate them with a model. Generate from a photo of a real sample first, a text prompt second. CC0 libraries first, then paid trusted sites; an existing purchased material library is linked later | D-18, section 10 (texture sets), S-8 |
 
 ## 17. Items to verify
 
@@ -302,6 +314,9 @@ No owner questions remain open. These are claims in this document that were writ
 - Compatibility of the MIT-licensed UE plugin with the current Epic EULA (D-19).
 - Datasmith Runtime and glTF runtime behavior in UE 5.8 packaged builds (S-2).
 - Current licenses and Windows hardware requirements of the local mesh generators (10.6, S-6).
+- Candidates, licenses (including output-use terms) and Windows hardware requirements of local material generators (10.6, S-8).
+- Terms, APIs and published physical sizes of the CC0 and paid material libraries considered (10.3).
+- Runtime loading of PNG and JPEG textures in UE 5.8 packaged builds (11.3, 12.4).
 - DXF version and header variable values accepted by AutoCAD 2018 (11.1, S-7).
 - IFC4 entity mappings and free-viewer acceptance (11.2).
 
