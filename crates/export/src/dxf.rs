@@ -14,7 +14,10 @@
 //! - each driving Distance constraint as a dimension line, two extension
 //!   lines and its value in feet-inches on DIMENSIONS (the 11.1 fallback);
 //! - each Point datum, the fiducials (spec 5.4, S-3), as a POINT on DATUMS
-//!   with its name as left-aligned text inserted at the same point.
+//!   with its name as left-aligned text inserted at the same point;
+//! - for a provisional model only, its Proposed items (spec 7.4) as
+//!   left-aligned text lines on PROPOSED below the drawing: a heading, then
+//!   one line per item in `proposed_items` order.
 //!
 //! Every layer names the Normal plot style placeholder (group 390), which
 //! AutoCAD 2018 requires in R2000 files (found at gate G-3).
@@ -25,9 +28,10 @@
 use std::fmt;
 
 use archviz_core::{
-    Axis, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document, Function,
-    GeometryError, Length, Point, SolveError, SpaceError, boundary_outline, footprint,
-    format_length, reference_coordinate, wall_geometry, wall_profiles,
+    Axis, CanonicalError, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document,
+    Function, GeometryError, Length, Point, RequiredParameter, SolveError, SpaceError,
+    boundary_outline, footprint, format_length, proposed_items, reference_coordinate,
+    wall_geometry, wall_profiles,
 };
 
 /// Why a document cannot be exported.
@@ -36,6 +40,7 @@ pub enum DxfError {
     Geometry(GeometryError),
     Space(SpaceError),
     Solve(SolveError),
+    Canonical(CanonicalError),
 }
 
 impl fmt::Display for DxfError {
@@ -44,6 +49,7 @@ impl fmt::Display for DxfError {
             DxfError::Geometry(e) => write!(f, "{e}"),
             DxfError::Space(e) => write!(f, "{e}"),
             DxfError::Solve(e) => write!(f, "{e}"),
+            DxfError::Canonical(e) => write!(f, "{e}"),
         }
     }
 }
@@ -110,6 +116,10 @@ const LAYERS: &[(&str, u8)] = &[
     ("DIMENSIONS", 2),
     ("DATUMS", 6),
 ];
+/// The layer of a provisional model's Proposed items, present only then.
+const PROPOSED_LAYER: (&str, u8) = ("PROPOSED", 30);
+/// The distance between the baselines of two Proposed-item lines.
+const LINE_PITCH: i64 = 10 * 25_400_000;
 const TEXT_HEIGHT: i64 = 6 * 25_400_000;
 const IN: i64 = 25_400_000;
 
@@ -206,6 +216,8 @@ enum Item {
     Text(&'static str, (i64, i64), String, &'static str),
     /// A labeled point: a POINT and its name inserted at it.
     Datum((i64, i64), String),
+    /// A left-aligned line of the Proposed-items list.
+    Note((i64, i64), String),
 }
 
 fn xy(p: &Point) -> (i64, i64) {
@@ -344,6 +356,42 @@ fn items(doc: &Document) -> Result<Vec<Item>, DxfError> {
     Ok(out)
 }
 
+/// The Proposed-items list as lines below everything in `items`: a heading,
+/// then "<label or entity id> <field> = <proposed default>" per item.
+fn notes(items: &[Item], proposed: &[RequiredParameter]) -> Vec<Item> {
+    if proposed.is_empty() {
+        return Vec::new();
+    }
+    let ((left, bottom), _) = bounds(items.iter().flat_map(points)).unwrap_or(((0, 0), (0, 0)));
+    let mut lines = vec![format!(
+        "PROVISIONAL MODEL: {} PROPOSED ITEMS",
+        proposed.len()
+    )];
+    for p in proposed {
+        let name = p.label.clone().unwrap_or_else(|| p.entity.to_string());
+        let value = p.proposed_display.clone().unwrap_or_default();
+        lines.push(format!("{name} {} = {value}", p.field));
+    }
+    let top = bottom.saturating_sub(24 * IN);
+    lines
+        .into_iter()
+        .zip(0i64..)
+        .map(|(line, k)| {
+            let y = top.saturating_sub(LINE_PITCH.saturating_mul(k));
+            Item::Note((left, y), line)
+        })
+        .collect()
+}
+
+/// The points an item occupies, for the drawing's extents.
+fn points(item: &Item) -> Vec<(i64, i64)> {
+    match item {
+        Item::Outline(_, pts) => pts.clone(),
+        Item::Line(_, a, b) => vec![*a, *b],
+        Item::Text(_, p, _, _) | Item::Datum(p, _) | Item::Note(p, _) => vec![*p],
+    }
+}
+
 fn table(out: &mut Out, name: &str, handle: &str, count: usize) {
     out.pairs(&[
         (0, "TABLE"),
@@ -427,13 +475,15 @@ fn layout(out: &mut Out, handle: &str, name: &str, flags: &str, tab: &str, block
 
 /// The DXF text of `document`, which should be derived (solved).
 pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
-    let items = items(document)?;
-    let points = items.iter().flat_map(|i| match i {
-        Item::Outline(_, pts) => pts.clone(),
-        Item::Line(_, a, b) => vec![*a, *b],
-        Item::Text(_, p, _, _) | Item::Datum(p, _) => vec![*p],
-    });
-    let (min, max) = bounds(points).unwrap_or(((0, 0), (0, 0)));
+    let proposed = proposed_items(document).map_err(DxfError::Canonical)?;
+    let mut items = items(document)?;
+    let notes = notes(&items, &proposed);
+    items.extend(notes);
+    let (min, max) = bounds(items.iter().flat_map(points)).unwrap_or(((0, 0), (0, 0)));
+    let mut layers = LAYERS.to_vec();
+    if !proposed.is_empty() {
+        layers.push(PROPOSED_LAYER);
+    }
     // Entities take handles from 0x100 up; fixed objects use lower handles.
     let mut body = Out {
         text: String::new(),
@@ -448,6 +498,7 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
                 body.point("DATUMS", *at);
                 body.label("DATUMS", *at, name);
             }
+            Item::Note(at, line) => body.label(PROPOSED_LAYER.0, *at, line),
         }
     }
     let seed = format!("{:X}", body.next_handle);
@@ -542,8 +593,8 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
         out.pairs(&[(3, description), (72, "65"), (73, "0"), (40, "0.0")]);
     }
     out.pair(0, "ENDTAB");
-    table(&mut out, "LAYER", "8", LAYERS.len());
-    for (i, (name, colour)) in LAYERS.iter().enumerate() {
+    table(&mut out, "LAYER", "8", layers.len());
+    for (i, (name, colour)) in layers.iter().enumerate() {
         let h = format!("{:X}", 0x10 + i);
         record(&mut out, "LAYER", &h, "8", "AcDbLayerTableRecord", name);
         // R2000 layers must name a plot style (G-3): the Normal placeholder.
@@ -1189,6 +1240,67 @@ mod tests {
             .filter(|e| matches!(e.specific, ::dxf::entities::EntityType::ModelPoint(_)))
             .count();
         assert_eq!(points, 4);
+    }
+
+    /// T-195 Done when: the DXF of a provisional document lists every item
+    /// of `proposed_items`, in order, on the PROPOSED layer below the
+    /// drawing, and supplying the values removes the list.
+    #[test]
+    fn a_provisional_dxf_lists_its_proposed_items() {
+        let doc = crate::gltf::tests::provisional(plan());
+        let items = proposed_items(&doc).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(items.len(), 2);
+        let text = write_dxf(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let drawing = read(&text);
+        assert!(drawing.layers().any(|l| l.name == "PROPOSED"));
+        let notes: Vec<(String, f64, f64)> = drawing
+            .entities()
+            .filter(|e| e.common.layer == "PROPOSED")
+            .filter_map(|e| match &e.specific {
+                ::dxf::entities::EntityType::Text(t) => {
+                    Some((t.value.clone(), t.location.x, t.location.y))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut expected = vec!["PROVISIONAL MODEL: 2 PROPOSED ITEMS".to_string()];
+        for p in &items {
+            let name = p.label.clone().unwrap_or_else(|| p.entity.to_string());
+            let value = p.proposed_display.clone().unwrap_or_default();
+            expected.push(format!("{name} {} = {value}", p.field));
+        }
+        assert!(
+            expected[1..]
+                .iter()
+                .any(|l| l.ends_with("/layers/0/thickness = 0'-4\""))
+        );
+        let values: Vec<String> = notes.iter().map(|n| n.0.clone()).collect();
+        assert_eq!(values, expected);
+        // Left-aligned in one column, top to bottom, below everything else.
+        let lowest = drawing
+            .entities()
+            .filter(|e| e.common.layer != "PROPOSED")
+            .filter_map(|e| match &e.specific {
+                ::dxf::entities::EntityType::LwPolyline(p) => {
+                    p.vertices.iter().map(|v| v.y).reduce(f64::min)
+                }
+                _ => None,
+            })
+            .reduce(f64::min)
+            .unwrap_or(0.0);
+        assert!(notes.iter().all(|n| n.1 == notes[0].1 && n.2 < lowest));
+        assert!(notes.windows(2).all(|w| w[1].2 < w[0].2));
+        // Supplied: the list and its layer are gone, the file is as before.
+        let mut supplied = doc;
+        for set in supplied.layer_sets.values_mut() {
+            for layer in &mut set.layers {
+                layer.thickness.source = Source::UserStated;
+            }
+        }
+        for storey in supplied.storeys.values_mut() {
+            storey.default_ceiling_height.source = Source::UserStated;
+        }
+        assert_eq!(write_dxf(&supplied).ok(), Some(written()));
     }
 
     #[test]

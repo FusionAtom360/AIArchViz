@@ -635,3 +635,42 @@ fn the_roof_sits_on_its_underside_and_the_walls_reach_it() {
         "{vol} vs {expected}"
     );
 }
+
+/// `doc` with its wall thickness and default ceiling height at their
+/// Proposed defaults.
+pub(crate) fn provisional(mut doc: Document) -> Document {
+    for set in doc.layer_sets.values_mut() {
+        for layer in &mut set.layers {
+            layer.thickness.source = Source::Proposed;
+        }
+    }
+    for storey in doc.storeys.values_mut() {
+        storey.default_ceiling_height.source = Source::Proposed;
+    }
+    doc
+}
+
+/// T-195 Done when: the GLB of a provisional document carries every item
+/// of `proposed_items`, in order, and supplying the values removes the list.
+#[test]
+fn a_provisional_glb_lists_its_proposed_items() {
+    let doc = provisional(l_room(true));
+    let items = proposed_items(&doc).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(items.len(), 2);
+    let (json, _) = chunks(&glb(&doc));
+    let expected = serde_json::to_value(&items).unwrap_or_default();
+    assert_eq!(json["extras"]["proposed_items"], expected);
+    // Supplied: the list is gone and the GLB is the non-provisional one.
+    let mut supplied = doc;
+    for set in supplied.layer_sets.values_mut() {
+        for layer in &mut set.layers {
+            layer.thickness.source = Source::UserStated;
+        }
+    }
+    for storey in supplied.storeys.values_mut() {
+        storey.default_ceiling_height.source = Source::UserStated;
+    }
+    let bytes = glb(&supplied);
+    assert!(chunks(&bytes).0.get("extras").is_none());
+    assert_eq!(bytes, glb(&l_room(true)));
+}

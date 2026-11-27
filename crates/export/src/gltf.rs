@@ -28,13 +28,17 @@
 //! flat normals as glTF 2.0 requires and see each element as one closed
 //! solid (Q-70); there are no materials yet. Geometry is built in integer
 //! nanometers; floats appear only in the final conversion.
+//!
+//! The GLB of a provisional model lists its Proposed items (spec 7.4) in the
+//! root `extras.proposed_items`, serialized as in scene.json; the per-element
+//! GLBs of the Scene Package do not, since scene.json carries the list.
 
 use std::fmt;
 
 use archviz_core::{
-    Axis, DatumGeometry, Direction, Document, GeometryError, Length, OpeningKind, Point,
-    RoofProblem, SpaceError, Uuid, boundary_outline, footprint, height_range, roof_geometry,
-    roof_outline, wall_geometry, wall_profiles,
+    Axis, CanonicalError, DatumGeometry, Direction, Document, GeometryError, Length, OpeningKind,
+    Point, RoofProblem, SpaceError, Uuid, boundary_outline, footprint, height_range,
+    proposed_items, roof_geometry, roof_outline, wall_geometry, wall_profiles,
 };
 use serde_json::{Map, Value, json};
 
@@ -56,6 +60,7 @@ pub enum GltfError {
     /// A face could not be triangulated (it is degenerate or self-crossing).
     Triangulation(Uuid),
     Overflow,
+    Canonical(CanonicalError),
 }
 
 impl fmt::Display for GltfError {
@@ -70,6 +75,7 @@ impl fmt::Display for GltfError {
             GltfError::UnknownStorey(id) => write!(f, "unknown storey {id}"),
             GltfError::Triangulation(id) => write!(f, "a face of {id} cannot be triangulated"),
             GltfError::Overflow => f.write_str("a coordinate is out of range"),
+            GltfError::Canonical(e) => write!(f, "{e}"),
         }
     }
 }
@@ -702,19 +708,27 @@ pub(crate) fn elements(document: &Document) -> Result<Vec<Element>, GltfError> {
 
 /// The GLB bytes for `document`. The same document gives the same bytes.
 pub fn write_glb(document: &Document) -> Result<Vec<u8>, GltfError> {
+    let proposed = proposed_items(document).map_err(GltfError::Canonical)?;
     let elements = elements(document)?;
-    encode(&elements.iter().collect::<Vec<_>>(), true)
+    let extras = if proposed.is_empty() {
+        None
+    } else {
+        let list = serde_json::to_value(&proposed)
+            .map_err(|e| GltfError::Canonical(CanonicalError::Json(e.to_string())))?;
+        Some(json!({ "proposed_items": list }))
+    };
+    encode(&elements.iter().collect::<Vec<_>>(), true, extras)
 }
 
 /// A GLB holding only `element`'s mesh in element-local coordinates, with
 /// no node translation: the Scene Package places it (11.3, Q-57).
 pub(crate) fn element_glb(element: &Element) -> Result<Vec<u8>, GltfError> {
-    encode(&[element], false)
+    encode(&[element], false, None)
 }
 
 /// Encodes `elements` as one GLB; `place` sets each node's translation to
-/// the element's origin.
-fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
+/// the element's origin, and `extras`, when given, is the root's extras.
+fn encode(elements: &[&Element], place: bool, extras: Option<Value>) -> Result<Vec<u8>, GltfError> {
     let (mut bin, mut views, mut accessors, mut meshes, mut nodes) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for e in elements {
@@ -800,6 +814,9 @@ fn encode(elements: &[&Element], place: bool) -> Result<Vec<u8>, GltfError> {
         root["accessors"] = json!(accessors);
         root["bufferViews"] = json!(views);
         root["buffers"] = json!([{ "byteLength": bin.len() }]);
+    }
+    if let Some(extras) = extras {
+        root["extras"] = extras;
     }
     let mut text = serde_json::to_vec(&root).map_err(|_| GltfError::Overflow)?;
     while text.len() % 4 != 0 {
