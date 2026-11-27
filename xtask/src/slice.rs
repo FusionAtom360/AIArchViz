@@ -244,6 +244,71 @@ mod tests {
         Ok(())
     }
 
+    /// T-191 (S-3, spec 5.4): the slice's L-room DXF, read back as group
+    /// pairs, has a POINT on DATUMS at each fiducial and a TEXT naming it at
+    /// the same point, exact to the nanometer.
+    #[test]
+    fn l_room_dxf_fiducials_read_back_exactly() -> Result<(), String> {
+        let root = crate::workspace_root();
+        let project = temp("l-room-dxf");
+        replay(&script(&root, "l-room")?, &project)?;
+        let dxf = exports("l-room", &project)?
+            .files
+            .get("l-room.dxf")
+            .cloned()
+            .ok_or("no DXF")?;
+        let _ = std::fs::remove_dir_all(&project);
+        let text = String::from_utf8(dxf).map_err(|e| e.to_string())?;
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        let mut objects: Vec<(&str, Vec<(i32, &str)>)> = Vec::new();
+        for pair in lines.chunks(2) {
+            let [code, value] = pair else { continue };
+            match code.trim().parse::<i32>() {
+                Ok(0) => objects.push((value, Vec::new())),
+                Ok(c) => {
+                    if let Some(last) = objects.last_mut() {
+                        last.1.push((c, value));
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        fn get<'a>(p: &[(i32, &'a str)], code: i32) -> Option<&'a str> {
+            p.iter().find(|(c, _)| *c == code).map(|(_, v)| *v)
+        }
+        let at = |p: &[(i32, &str)]| {
+            let c = |code| get(p, code).and_then(archviz_export::parse_inches);
+            (c(10), c(20))
+        };
+        let mut points = Vec::new();
+        let mut labels = BTreeMap::new();
+        for (kind, p) in &objects {
+            if get(p, 8) != Some("DATUMS") {
+                continue;
+            }
+            match *kind {
+                "POINT" => points.push(at(p)),
+                "TEXT" => {
+                    labels.insert(get(p, 1).unwrap_or_default(), at(p));
+                }
+                _ => {}
+            }
+        }
+        let i = |n: i64| Some(n * 25_400_000);
+        let expected = BTreeMap::from([
+            ("F-A", (i(0), i(0))),
+            ("F-B", (i(240), i(0))),
+            ("F-C", (i(240), i(96))),
+            ("F-D", (i(0), i(180))),
+        ]);
+        assert_eq!(labels, expected);
+        points.sort();
+        let mut labelled: Vec<_> = expected.values().copied().collect();
+        labelled.sort();
+        assert_eq!(points, labelled);
+        Ok(())
+    }
+
     /// S-1: the shop's solution does not depend on the order in which its
     /// walls and constraints were entered.
     #[test]

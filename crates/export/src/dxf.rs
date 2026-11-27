@@ -12,7 +12,9 @@
 //! - slab outlines on SLABS;
 //! - occurrence footprints on EQUIPMENT, labels as text on EQUIPMENT-LABELS;
 //! - each driving Distance constraint as a dimension line, two extension
-//!   lines and its value in feet-inches on DIMENSIONS (the 11.1 fallback).
+//!   lines and its value in feet-inches on DIMENSIONS (the 11.1 fallback);
+//! - each Point datum, the fiducials (spec 5.4, S-3), as a POINT on DATUMS
+//!   with its name as left-aligned text inserted at the same point.
 //!
 //! Every layer names the Normal plot style placeholder (group 390), which
 //! AutoCAD 2018 requires in R2000 files (found at gate G-3).
@@ -23,9 +25,9 @@
 use std::fmt;
 
 use archviz_core::{
-    Axis, ConstraintKind, ConstraintStatus, Direction, Document, Function, GeometryError, Length,
-    Point, SolveError, SpaceError, boundary_outline, footprint, format_length,
-    reference_coordinate, wall_geometry, wall_profiles,
+    Axis, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document, Function,
+    GeometryError, Length, Point, SolveError, SpaceError, boundary_outline, footprint,
+    format_length, reference_coordinate, wall_geometry, wall_profiles,
 };
 
 /// Why a document cannot be exported.
@@ -106,6 +108,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("EQUIPMENT", 3),
     ("EQUIPMENT-LABELS", 3),
     ("DIMENSIONS", 2),
+    ("DATUMS", 6),
 ];
 const TEXT_HEIGHT: i64 = 6 * 25_400_000;
 const IN: i64 = 25_400_000;
@@ -166,6 +169,22 @@ impl Out {
         self.pair(31, "0.0");
     }
 
+    fn point(&mut self, layer: &str, at: (i64, i64)) {
+        self.entity("POINT", layer, "AcDbPoint");
+        self.xy(10, at);
+        self.pair(30, "0.0");
+    }
+
+    /// Text with its baseline starting at `at`.
+    fn label(&mut self, layer: &str, at: (i64, i64), value: &str) {
+        self.entity("TEXT", layer, "AcDbText");
+        self.xy(10, at);
+        self.pair(30, "0.0");
+        self.pair(40, &inches(TEXT_HEIGHT));
+        self.pair(1, value);
+        self.pairs(&[(50, "0.0"), (100, "AcDbText")]);
+    }
+
     /// Text centered on `at`.
     fn text(&mut self, layer: &str, at: (i64, i64), value: &str, rotation: &str) {
         self.entity("TEXT", layer, "AcDbText");
@@ -185,6 +204,8 @@ enum Item {
     Outline(&'static str, Vec<(i64, i64)>),
     Line(&'static str, (i64, i64), (i64, i64)),
     Text(&'static str, (i64, i64), String, &'static str),
+    /// A labeled point: a POINT and its name inserted at it.
+    Datum((i64, i64), String),
 }
 
 fn xy(p: &Point) -> (i64, i64) {
@@ -265,6 +286,14 @@ fn items(doc: &Document) -> Result<Vec<Item>, DxfError> {
             o.label.to_string(),
             "0.0",
         ));
+    }
+    for d in doc.datums.values() {
+        if let DatumGeometry::Point { x, y } = d.geometry {
+            out.push(Item::Datum(
+                (x.nanometers(), y.nanometers()),
+                d.name.clone(),
+            ));
+        }
     }
     // Dimensions (the 11.1 fallback), outside the drawing's extents.
     let extents = bounds(out.iter().flat_map(|i| match i {
@@ -402,7 +431,7 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
     let points = items.iter().flat_map(|i| match i {
         Item::Outline(_, pts) => pts.clone(),
         Item::Line(_, a, b) => vec![*a, *b],
-        Item::Text(_, p, _, _) => vec![*p],
+        Item::Text(_, p, _, _) | Item::Datum(p, _) => vec![*p],
     });
     let (min, max) = bounds(points).unwrap_or(((0, 0), (0, 0)));
     // Entities take handles from 0x100 up; fixed objects use lower handles.
@@ -415,6 +444,10 @@ pub fn write_dxf(document: &Document) -> Result<String, DxfError> {
             Item::Outline(layer, pts) => body.polyline(layer, pts),
             Item::Line(layer, a, b) => body.line(layer, *a, *b),
             Item::Text(layer, at, value, rotation) => body.text(layer, *at, value, rotation),
+            Item::Datum(at, name) => {
+                body.point("DATUMS", *at);
+                body.label("DATUMS", *at, name);
+            }
         }
     }
     let seed = format!("{:X}", body.next_handle);
@@ -678,7 +711,7 @@ mod tests {
     use super::*;
     use archviz_core::*;
     use proptest::prelude::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const IN: i64 = 25_400_000;
 
@@ -946,6 +979,7 @@ mod tests {
             "EQUIPMENT",
             "EQUIPMENT-LABELS",
             "DIMENSIONS",
+            "DATUMS",
         ] {
             assert!(layers.contains(name), "missing layer {name}: {layers:?}");
         }
@@ -1060,7 +1094,13 @@ mod tests {
             .filter(|(t, _)| t == "LAYER")
             .map(|(_, p)| p)
             .collect();
-        assert_eq!(layers.len(), 9);
+        assert_eq!(layers.len(), 10);
+        assert!(
+            layers
+                .iter()
+                .any(|l| value(l, 2).as_deref() == Some("DATUMS")),
+            "{layers:?}"
+        );
         for layer in layers {
             assert_eq!(
                 value(layer, 390),
@@ -1095,6 +1135,60 @@ mod tests {
             )),
             "{named:?}"
         );
+    }
+
+    /// The POINTs on DATUMS by the TEXT label written at each, in
+    /// nanometers read back from the decimal inches; panics on a POINT with
+    /// no label or a label on no POINT.
+    fn datums(text: &str) -> BTreeMap<String, (i64, i64)> {
+        let at = |p: &[(i32, String)]| {
+            let c = |code| value(p, code).and_then(|v| parse_inches(&v));
+            (c(10).unwrap_or(i64::MIN), c(20).unwrap_or(i64::MIN))
+        };
+        let on_datums = |kind: &str| -> Vec<Vec<(i32, String)>> {
+            objects(text)
+                .into_iter()
+                .filter(|(t, p)| t == kind && value(p, 8).as_deref() == Some("DATUMS"))
+                .map(|(_, p)| p)
+                .collect()
+        };
+        let points: BTreeSet<(i64, i64)> = on_datums("POINT").iter().map(|p| at(p)).collect();
+        let labels: BTreeMap<String, (i64, i64)> = on_datums("TEXT")
+            .iter()
+            .map(|p| (value(p, 1).unwrap_or_default(), at(p)))
+            .collect();
+        let labelled: BTreeSet<(i64, i64)> = labels.values().copied().collect();
+        assert_eq!(points, labelled, "every POINT and only POINTs are labeled");
+        labels
+    }
+
+    /// T-191 Done when: the L-room DXF read back has F-A to F-D at (0, 0),
+    /// (240, 0), (240, 96) and (0, 180) in inches, exact to the nanometer,
+    /// each labeled with its name (S-3, spec 5.4).
+    #[test]
+    fn l_room_fiducials_read_back_from_the_dxf() {
+        let doc = derive(crate::gltf::tests::l_room(true))
+            .map(|d| d.document)
+            .unwrap_or_else(|e| panic!("derive: {e}"));
+        let text = write_dxf(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let expected: BTreeMap<String, (i64, i64)> = [
+            ("F-A", (0, 0)),
+            ("F-B", (240 * IN, 0)),
+            ("F-C", (240 * IN, 96 * IN)),
+            ("F-D", (0, 180 * IN)),
+        ]
+        .into_iter()
+        .map(|(n, p)| (n.to_string(), p))
+        .collect();
+        assert_eq!(datums(&text), expected);
+        // An independent reader sees four POINTs on DATUMS.
+        let drawing = read(&text);
+        let points = drawing
+            .entities()
+            .filter(|e| e.common.layer == "DATUMS")
+            .filter(|e| matches!(e.specific, ::dxf::entities::EntityType::ModelPoint(_)))
+            .count();
+        assert_eq!(points, 4);
     }
 
     #[test]

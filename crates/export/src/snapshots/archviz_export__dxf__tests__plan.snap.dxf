@@ -243,7 +243,7 @@ LAYER
 100
 AcDbSymbolTable
  70
-9
+10
   0
 LAYER
   5
@@ -420,6 +420,26 @@ DIMENSIONS
 0
  62
 2
+  6
+Continuous
+390
+36
+  0
+LAYER
+  5
+19
+330
+8
+100
+AcDbSymbolTableRecord
+100
+AcDbLayerTableRecord
+  2
+DATUMS
+ 70
+0
+ 62
+6
   6
 Continuous
 390
