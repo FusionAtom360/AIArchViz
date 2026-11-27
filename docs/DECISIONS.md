@@ -21,6 +21,7 @@ Spike results and approved deviations from docs/SPEC.md. Claude Code drafts; the
 - G-3 attempt 1 (2026-11-26): AutoCAD 2018 refused the file: "Error in LAYER Table. Did not receive PlotStyleName on line 266. Invalid or incomplete DXF input -- drawing discarded." Fix: every layer now names the Normal plot style placeholder (group 390) held in an ACAD_PLOTSTYLENAME dictionary with default; a regression test checks the chain.
 - G-3 attempt 2 (2026-11-26, owner, AutoCAD 2018): opens without repair prompt: pass; units: pass (lengths display in feet-inches, the Architectural format of $LUNITS 4, on the inch base unit of $INSUNITS 1); a known wall dimension reads exactly: pass; layers present: pass (0, DIMENSIONS, EQUIPMENT, EQUIPMENT-LABELS, OPENINGS, SLABS, WALLS, WALLS-DEMOLISHED, WALLS-EXISTING); overlay on the owner's drawing registers: pass.
 - S-7 result: pass for DXF R2000 (AC1015) with $INSUNITS 1, $LUNITS 4, $LUPREC 4 and the dimension fallback. True DIMENSION entities are not needed for now (Q-52).
+- G-3 repeat (2026-11-27, owner, AutoCAD 2018; Q-74 gate option (i)): the slice shop.dxf after T-195 (PROPOSED layer, 93 text lines) and T-196 (no zero-length dimensions), SHA-256 a56860098c7e54cc6b09fe4baefbc27436d25975fc7fa30960c7efa989a7376b, opens clean with no repair prompt: pass.
 - Status: approved (owner, G-3, 2026-11-26)
 
 ## DEC-2: glTF validation with the Khronos validator
