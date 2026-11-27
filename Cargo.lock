@@ -111,6 +111,7 @@ dependencies = [
  "archviz-cli",
  "archviz-core",
  "eframe",
+ "proptest",
  "serde_json",
  "uuid",
 ]

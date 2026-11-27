@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use archviz_cli::host::{Notify, Server, Shared, serve};
-use archviz_cli::{CliError, Host, NewRequest, new_project, store};
-use archviz_core::Uuid;
+use archviz_cli::{CliError, Host, NewRequest, new_project, run_on, store};
+use archviz_core::{Action, Command, Document, ProposedAction, Uuid};
 
 /// The real clock and random ids for commands the app hosts (Q-49).
 pub struct System;
@@ -124,6 +124,37 @@ impl Session {
         }
     }
 
+    /// The committed document, for the plan view.
+    pub fn document(&self) -> Document {
+        self.lock().project.history.document().clone()
+    }
+
+    /// Proposes `action` through the command API (`propose`, which stores
+    /// nothing) and returns the proposal, or the error message.
+    pub fn propose(&self, action: Action) -> Result<serde_json::Value, String> {
+        let mut shared = self.lock();
+        let command = Command {
+            id: shared.host.new_uuid(),
+            idempotency_key: shared.host.new_uuid(),
+            action,
+        };
+        let request = serde_json::json!({
+            "action": ProposedAction::Commands { commands: vec![command] },
+        });
+        let args = ["propose".to_string(), self.dir.display().to_string()];
+        let Shared { project, host } = &mut *shared;
+        let (out, _) = run_on(project, &args, &request.to_string(), host.as_mut());
+        let response: serde_json::Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+        if response["ok"] == serde_json::Value::Bool(true) {
+            Ok(response["result"].clone())
+        } else {
+            Err(response["error"]["message"]
+                .as_str()
+                .unwrap_or("the proposal failed")
+                .to_string())
+        }
+    }
+
     /// "Save a copy as": the project's genesis and committed log, written
     /// into `dest`, which must not hold a project already.
     pub fn save_copy_as(&self, dest: &Path) -> Result<(), CliError> {
@@ -228,5 +259,73 @@ mod tests {
         let (out, status) = cli("query", &dir, r#"{"collection":"nodes"}"#);
         assert_eq!(status, 0, "{out}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::Session;
+    use crate::drag::Drag;
+    use crate::scene::tests::shop;
+    use crate::scene::{Entity, Scene};
+    use crate::viewport::{Screen, Viewport};
+    use archviz_core::GRID_NM;
+
+    /// Done when (part 2): a drag in the plan view, from fractional screen
+    /// positions, yields a command whose value is a snapped integer, and the
+    /// command API accepts it as a proposal without committing anything.
+    #[test]
+    fn a_drag_yields_a_snapped_move_the_command_api_proposes() {
+        let (dir, _) = shop("session-drag");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        let version = session.version();
+        let scene = Scene::build(&session.document()).unwrap_or_else(|e| panic!("{e}"));
+        let ((x0, y0), (x1, y1)) = scene.bounds().unwrap_or(((0, 0), (0, 0)));
+        let mut v = Viewport::fit(
+            (x0, y0),
+            (x1, y1),
+            (1280.0, 800.0),
+            40.0,
+            Screen { x: 640.0, y: 400.0 },
+        );
+        // Zoom in on a wall, then grab its face and drag by an awkward amount.
+        let w = scene
+            .walls
+            .iter()
+            .find(|w| w.across == archviz_core::Axis::X)
+            .unwrap_or_else(|| panic!("a north-south wall"));
+        let y_mid = w.footprint.iter().map(|p| p.1).sum::<i64>() / w.footprint.len() as i64;
+        let face = v.to_screen((w.left, y_mid));
+        v.zoom_about(face, 37.3);
+        let press = v.to_screen((w.left, y_mid));
+        let press = Screen {
+            x: press.x + 0.37,
+            y: press.y - 0.21,
+        };
+        let release = Screen {
+            x: press.x + 123.456,
+            y: press.y + 7.7,
+        };
+        let at = v.to_world(press);
+        assert_eq!(scene.pick(at, v.nm(6.0)), Some(Entity::Wall(w.id)));
+        let drag = Drag::begin(&scene, Entity::Wall(w.id), at).unwrap_or_else(|| panic!());
+        let preview = drag
+            .update(&scene, v.to_world(release), v.nm(8.0))
+            .unwrap_or_else(|| panic!());
+        let action = preview.action.unwrap_or_else(|| panic!("the wall moved"));
+        let proposal = session.propose(action).unwrap_or_else(|e| panic!("{e}"));
+        let command = &proposal["action"]["commands"][0];
+        assert_eq!(command["kind"], "move_wall", "{proposal}");
+        let target = command["args"]["motion"]["target"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("{command}"));
+        assert_eq!(target % GRID_NM, 0, "{target}");
+        assert_eq!(target, preview.snap.value);
+        let echo = proposal["echo"][0].as_str().unwrap_or_default();
+        assert!(
+            echo.starts_with(&format!("Move {} left face", w.label)),
+            "{echo}"
+        );
+        assert_eq!(session.version(), version, "proposing commits nothing");
     }
 }
