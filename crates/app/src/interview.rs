@@ -224,7 +224,9 @@ pub(crate) mod tests {
         let p = session
             .propose_commands(wrap(setup_actions(&session.document())))
             .unwrap_or_else(|e| panic!("{e}"));
-        session.commit(&p).unwrap_or_else(|e| panic!("{e}"));
+        session
+            .commit(&crate::session::confirmed(&session, p.clone()))
+            .unwrap_or_else(|e| panic!("{e}"));
         let storey = storey_for(&session.document()).unwrap_or_else(|| panic!());
         let ft = 12 * IN;
         let run = Run {
@@ -235,7 +237,9 @@ pub(crate) mod tests {
         let p = session
             .propose_commands(walls)
             .unwrap_or_else(|e| panic!("{e}"));
-        session.commit(&p).unwrap_or_else(|e| panic!("{e}"));
+        session
+            .commit(&crate::session::confirmed(&session, p.clone()))
+            .unwrap_or_else(|e| panic!("{e}"));
         session.document()
     }
 

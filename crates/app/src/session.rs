@@ -16,6 +16,8 @@ use archviz_cli::host::{Notify, Server, Shared, serve};
 use archviz_cli::{CliError, Host, NewRequest, new_project, run_on, store};
 use archviz_core::{Action, Command, Document, ProposedAction, Uuid};
 
+use crate::review::Confirmed;
+
 /// The real clock and random ids for commands the app hosts (Q-49).
 pub struct System;
 
@@ -208,11 +210,12 @@ impl Session {
         Ok(Pending { action, result })
     }
 
-    /// Commits `pending` through the command API (`commit`) once the user
-    /// has confirmed its echo (DEC-10), and returns the new version. Fails,
-    /// committing nothing, if the project changed since it was proposed or
-    /// the proposal is blocked.
-    pub fn commit(&self, pending: &Pending) -> Result<u64, String> {
+    /// Commits a proposal through the command API (`commit`) once the user
+    /// has confirmed it in the review panel (DEC-10, T-204), and returns the
+    /// new version. Fails, committing nothing, if the project changed since
+    /// it was proposed or the proposal is blocked.
+    pub fn commit(&self, confirmed: &Confirmed) -> Result<u64, String> {
+        let pending = confirmed.pending();
         let request = serde_json::json!({
             "proposal_id": pending.result["proposal_id"],
             "base_version": pending.result["base_version"],
@@ -228,6 +231,12 @@ impl Session {
     pub fn save_copy_as(&self, dest: &Path) -> Result<(), CliError> {
         self.lock().project.copy_to(dest)
     }
+}
+
+#[cfg(test)]
+/// What the review panel's Confirm gives for `pending` (T-204).
+pub(crate) fn confirmed(session: &Session, pending: Pending) -> Confirmed {
+    crate::review::Review::new(&session.document(), pending).confirm()
 }
 
 #[cfg(test)]
@@ -403,7 +412,7 @@ mod plan_tests {
 
 #[cfg(test)]
 mod draw_tests {
-    use super::Session;
+    use super::{Session, confirmed};
     use crate::draw::tests::empty_project;
     use crate::draw::{Click, WallTool, run_commands, setup_actions, storey_for};
     use crate::scene::Scene;
@@ -441,7 +450,7 @@ mod draw_tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(pending.echo().len(), 2, "{:?}", pending.echo());
         assert_eq!(session.version(), 0, "proposing commits nothing");
-        assert_eq!(session.commit(&pending), Ok(1));
+        assert_eq!(session.commit(&confirmed(&session, pending.clone())), Ok(1));
         let doc = session.document();
         assert!(setup_actions(&doc).is_empty(), "set up once");
         assert!(doc.datums.values().any(|d| d.geometry
@@ -492,7 +501,7 @@ mod draw_tests {
         let echo = pending.echo();
         assert_eq!(echo.len(), 8, "{echo:?}");
         assert_eq!(session.version(), 1, "nothing commits before confirmation");
-        assert_eq!(session.commit(&pending), Ok(2));
+        assert_eq!(session.commit(&confirmed(&session, pending.clone())), Ok(2));
 
         let doc = session.document();
         assert_eq!(doc.walls.len(), 4);
@@ -557,15 +566,18 @@ mod draw_tests {
         };
         let first = setup(&session);
         let second = setup(&session);
-        assert_eq!(session.commit(&first), Ok(1));
-        assert!(session.commit(&second).is_err(), "proposed at version 0");
+        assert_eq!(session.commit(&confirmed(&session, first)), Ok(1));
+        assert!(
+            session.commit(&confirmed(&session, second)).is_err(),
+            "proposed at version 0"
+        );
         assert_eq!(session.version(), 1);
     }
 }
 
 #[cfg(test)]
 mod dimension_tests {
-    use super::{Pending, Session};
+    use super::{Pending, Session, confirmed};
     use crate::dimension::{
         DimensionTool, Pick, conflicts, distance_action, parse_value, pick, underconstrained_walls,
     };
@@ -597,7 +609,9 @@ mod dimension_tests {
     }
 
     fn confirm(session: &Session, pending: &Pending) -> u64 {
-        session.commit(pending).unwrap_or_else(|e| panic!("{e}"))
+        session
+            .commit(&confirmed(session, pending.clone()))
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     fn wall(scene: &Scene, direction: Direction) -> WallShape {
@@ -834,9 +848,198 @@ mod dimension_tests {
         );
         assert_eq!(report.walls, BTreeSet::from([west.id, east.id]));
         assert!(
-            session.commit(&pending).is_err(),
+            session
+                .commit(&confirmed(&session, pending.clone()))
+                .is_err(),
             "a conflict blocks commit"
         );
+        assert_eq!(session.version(), version);
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::Session;
+    use crate::draw::tests::empty_project;
+    use crate::draw::{Run, run_commands, setup_actions, storey_for};
+    use crate::review::{Review, Settings};
+    use crate::scene::tests::shop;
+    use archviz_core::{
+        Action, Command, CreateNode, Length, Motion, MoveWall, Reference, WallSide,
+    };
+
+    const FT: i64 = 304_800_000;
+    const ON: Settings = Settings {
+        auto_commit_unambiguous: true,
+    };
+
+    fn commands(session: &Session, actions: Vec<Action>) -> Vec<Command> {
+        actions
+            .into_iter()
+            .map(|action| {
+                let (id, idempotency_key) = session.ids();
+                Command {
+                    id,
+                    idempotency_key,
+                    action,
+                }
+            })
+            .collect()
+    }
+
+    /// Done when: no commit path bypasses the review panel except the
+    /// explicit auto_commit_unambiguous setting, off by default. Each kind
+    /// of proposal the app makes (setup, a drawn run, a drag move, a plain
+    /// edit) waits for Confirm under the default settings; with the setting
+    /// on, only the unambiguous one commits without it.
+    #[test]
+    fn only_confirm_or_the_opt_in_setting_commits_a_proposal() {
+        let defaults = Settings::default();
+        let (dir, _) = empty_project("review-flow");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+
+        // The storey and origin datum: Proposed values, so never automatic.
+        let setup = commands(&session, setup_actions(&session.document()));
+        let pending = session
+            .propose_commands(setup)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let review = Review::new(&session.document(), pending);
+        assert!(!review.proposed.is_empty(), "{review:?}");
+        assert!(review.auto(&defaults).is_none());
+        assert!(review.auto(&ON).is_none());
+        assert_eq!(session.version(), 0, "nothing commits before Confirm");
+        assert_eq!(session.commit(&review.confirm()), Ok(1));
+
+        // A drawn run of catalog walls: Proposed layers.
+        let storey = storey_for(&session.document()).unwrap_or_else(|| panic!("a storey"));
+        let run = Run {
+            points: vec![(0, 0), (10 * FT, 0), (10 * FT, 8 * FT)],
+            closed: false,
+        };
+        let walls = run_commands(&run, storey, || session.ids()).unwrap_or_else(|| panic!());
+        let pending = session
+            .propose_commands(walls)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let review = Review::new(&session.document(), pending);
+        assert_eq!(review.echo.len(), 5, "{:?}", review.echo);
+        assert!(review.diff.iter().any(|l| l.starts_with("Added wall W-")));
+        assert!(!review.proposed.is_empty());
+        assert!(review.auto(&defaults).is_none());
+        assert!(review.auto(&ON).is_none());
+        assert_eq!(session.version(), 1);
+        assert_eq!(session.commit(&review.confirm()), Ok(2));
+
+        // A plain edit with no ambiguity, Proposed value or consequence:
+        // still waits under the default settings; commits on its own only
+        // once the user turns the setting on.
+        let node = Action::CreateNode(CreateNode {
+            x: Length::from_nanometers(20 * FT),
+            y: Length::from_nanometers(0),
+        });
+        let pending = session.propose(node).unwrap_or_else(|e| panic!("{e}"));
+        let review = Review::new(&session.document(), pending);
+        assert!(review.unambiguous(), "{review:?}");
+        assert_eq!(review.diff, ["Added node at (20'-0\", 0'-0\")"]);
+        assert!(review.auto(&defaults).is_none());
+        assert_eq!(session.version(), 2, "off by default: nothing committed");
+        let confirmed = review.auto(&ON).unwrap_or_else(|| panic!("unambiguous"));
+        assert_eq!(session.commit(&confirmed), Ok(3));
+
+        // A move (what a drag proposes) whose far side moves with it: the
+        // panel lists the consequences, and it never commits on its own.
+        let (dir, doc) = shop("review-move");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        let version = session.version();
+        let (id, _) = doc
+            .walls
+            .iter()
+            .find(|(_, w)| w.label.to_string() == "W-013")
+            .unwrap_or_else(|| panic!("W-013"));
+        let action = Action::MoveWall(MoveWall {
+            wall: *id,
+            reference: Reference::WallFace {
+                wall: *id,
+                side: WallSide::Left,
+                boundary: 0,
+            },
+            motion: Motion::Delta {
+                delta: Length::from_nanometers(FT),
+            },
+            edit: None,
+            absorb: Vec::new(),
+        });
+        let pending = session.propose(action).unwrap_or_else(|e| panic!("{e}"));
+        let review = Review::new(&doc, pending);
+        assert!(
+            review.echo[0].starts_with("Move W-013 left face 1'-0\" toward +Y"),
+            "{:?}",
+            review.echo
+        );
+        assert_eq!(
+            review.consequences,
+            ["wall W-014", "wall W-003", "wall W-004"]
+        );
+        assert_eq!(
+            review.diff[..2],
+            [
+                "Changed the distance from W-001 right face to W-013 right face along Y",
+                "  /kind/value: 3'-0\" -> 4'-0\"",
+            ]
+        );
+        assert!(review.blocked.is_empty(), "{:?}", review.blocked);
+        assert!(review.auto(&defaults).is_none());
+        assert!(review.auto(&ON).is_none(), "consequence moves need review");
+        assert_eq!(session.version(), version);
+        assert_eq!(session.commit(&review.confirm()), Ok(version + 1));
+    }
+
+    /// The panel names a move's alternatives (8.7 (b)) and its violations
+    /// with lengths in feet-inches, and a blocked proposal cannot commit.
+    #[test]
+    fn the_panel_shows_alternatives_and_violations_in_feet_and_inches() {
+        let (dir, doc) = shop("review-alternatives");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        let version = session.version();
+        let (id, _) = doc
+            .walls
+            .iter()
+            .find(|(_, w)| w.label.to_string() == "W-003")
+            .unwrap_or_else(|| panic!("W-003"));
+        let action = Action::MoveWall(MoveWall {
+            wall: *id,
+            reference: Reference::WallFace {
+                wall: *id,
+                side: WallSide::Left,
+                boundary: 0,
+            },
+            motion: Motion::Delta {
+                delta: Length::from_nanometers(FT),
+            },
+            edit: None,
+            absorb: Vec::new(),
+        });
+        let pending = session.propose(action).unwrap_or_else(|e| panic!("{e}"));
+        let review = Review::new(&doc, pending);
+        assert_eq!(review.alternatives.len(), 3, "{:?}", review.alternatives);
+        assert!(
+            review.alternatives[1].starts_with(
+                "door in W-007: set the distance from W-009 right face to W-003 right face \
+                 along X to 19'-0\", the offset of door in W-007 to 10'-0\"; moves "
+            ),
+            "{:?}",
+            review.alternatives
+        );
+        assert_eq!(
+            review.violations,
+            [
+                "Opening outside host: window in W-002 (opening too close to start clearance -0'-4\")"
+            ]
+        );
+        assert_eq!(review.existing, ["door in W-007"]);
+        assert!(review.ambiguities.is_empty());
+        assert_eq!(review.blocked, ["it leaves violations"]);
+        assert!(review.auto(&ON).is_none());
+        assert!(session.commit(&review.confirm()).is_err(), "blocked");
         assert_eq!(session.version(), version);
     }
 }

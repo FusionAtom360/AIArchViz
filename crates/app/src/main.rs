@@ -8,8 +8,7 @@
 //! T-202 adds the plan view: walls, openings, slabs, occurrences and labels
 //! drawn through a 64-bit transform, pan and zoom, selection, and dragging
 //! an entity into a move command snapped to the 1/16 in grid (3.1). A drag
-//! is proposed through the command API and its echo shown; reviewing and
-//! committing proposals is T-204.
+//! is proposed through the command API and reviewed like any proposal.
 //!
 //! T-202b adds the wall tool (draw.rs). Each drawn run, and on first use the
 //! storey and origin datum, is proposed through the command API, its echo
@@ -21,12 +20,19 @@
 //! walls of a proposal's conflicts, whose constraints are named. The
 //! interview panel (interview.rs) lists required parameters and sets wall
 //! thicknesses by group (Q-78 (i), (x)).
+//!
+//! T-204 adds the review panel (review.rs): every proposal (a drawn run, a
+//! drag, a dimension, a thickness) is shown with its echo, diff, violations,
+//! ambiguities, Proposed flags, consequences and alternatives, and commits
+//! only on Confirm, unless the user turns on auto_commit_unambiguous (off by
+//! default) and the proposal is unambiguous (9.4).
 
 mod dimension;
 mod drag;
 mod draw;
 mod interview;
 mod plan_view;
+mod review;
 mod scene;
 mod session;
 mod snap;
@@ -40,6 +46,7 @@ use archviz_core::{Action, Axis, Length, ProjectUnit, Source, Uuid, format_lengt
 
 use eframe::egui;
 use plan_view::{Event, PlanView};
+use review::Review;
 use scene::{Entity, Scene};
 use session::{Pending, Session, View};
 
@@ -82,12 +89,10 @@ struct App {
     view: Option<View>,
     scene: Built,
     plan: PlanView,
-    /// The echo of the last proposed drag, or why it failed.
-    proposal: Vec<String>,
-    /// A proposal waiting for the user to confirm its echo, and what it is.
-    pending: Option<(String, Pending)>,
-    /// The pending proposal's conflicts, named (7.5).
-    conflicts: dimension::ConflictReport,
+    /// A proposal in the review panel, and what it is.
+    pending: Option<(String, Review)>,
+    /// Review settings; auto-commit is off until the user turns it on.
+    settings: review::Settings,
     /// Two picked references and the value being typed for them.
     dimension: Option<(dimension::Pair, String)>,
     /// Required parameters and underconstrained walls, and the version they
@@ -139,9 +144,8 @@ impl App {
             view: None,
             scene: None,
             plan: PlanView::new(),
-            proposal: Vec::new(),
             pending: None,
-            conflicts: dimension::ConflictReport::default(),
+            settings: review::Settings::default(),
             dimension: None,
             checked: None,
             typed: BTreeMap::new(),
@@ -153,27 +157,34 @@ impl App {
         self.view = None;
         self.scene = None;
         self.plan = PlanView::new();
-        self.proposal.clear();
         self.pending = None;
-        self.conflicts = dimension::ConflictReport::default();
         self.dimension = None;
         self.checked = None;
         self.typed.clear();
     }
 
-    /// Holds `pending` for confirmation and highlights its conflicts.
+    /// Puts `pending` in the review panel and highlights its conflicts. With
+    /// auto_commit_unambiguous on, an unambiguous proposal commits at once.
     fn hold(&mut self, what: &str, pending: Pending) {
-        if let Some(session) = &self.session {
-            self.conflicts = dimension::conflicts(&session.document(), &pending);
+        let Some(session) = &self.session else {
+            return;
+        };
+        let review = Review::new(&session.document(), pending);
+        if let Some(confirmed) = review.auto(&self.settings) {
+            self.message = match session.commit(&confirmed) {
+                Ok(version) => format!("{what}: committed as version {version} (unambiguous)."),
+                Err(e) => format!("{what}: not committed: {e}"),
+            };
+            self.release();
+            return;
         }
-        self.plan.conflicting = self.conflicts.walls.clone();
-        self.pending = Some((what.to_string(), pending));
+        self.plan.conflicting = review.conflicts.walls.clone();
+        self.pending = Some((what.to_string(), review));
     }
 
-    /// Drops the pending proposal and its highlights.
+    /// Drops the proposal under review and its highlights.
     fn release(&mut self) {
         self.pending = None;
-        self.conflicts = dimension::ConflictReport::default();
         self.plan.conflicting.clear();
     }
 
@@ -385,42 +396,87 @@ impl App {
         }
     }
 
-    /// The proposal waiting for confirmation: its echo, Confirm and Discard.
-    fn confirm(&mut self, ui: &mut egui::Ui) {
-        let Some((what, pending)) = &self.pending else {
+    /// The review panel (8.3, 9.4): the echo the user confirms, then every
+    /// part of the proposal, then Confirm or Discard. Confirm is the only
+    /// way to commit unless auto_commit_unambiguous is on.
+    fn review(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.checkbox(
+            &mut self.settings.auto_commit_unambiguous,
+            "Commit unambiguous proposals without review",
+        )
+        .on_hover_text(
+            "Off by default. When on, a proposal with no ambiguities, no Proposed \
+             values and no consequence moves commits without this panel.",
+        );
+        let Some((what, review)) = &self.pending else {
             return;
         };
-        ui.separator();
-        ui.strong(format!("{what}: proposed, not yet committed"));
-        for line in pending.echo() {
-            ui.label(line);
+        ui.strong(format!("Review: {what} (proposed, not yet committed)"));
+        ui.label("You confirm this text:");
+        for line in &review.echo {
+            ui.label(egui::RichText::new(line).strong());
         }
-        for line in &self.conflicts.lines {
-            ui.colored_label(WARN, format!("Conflict: {line}"));
+        let section = |ui: &mut egui::Ui, title: &str, lines: &[String], warn: bool| {
+            if lines.is_empty() {
+                return;
+            }
+            egui::CollapsingHeader::new(format!("{title} ({})", lines.len()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    for line in lines {
+                        if warn {
+                            ui.colored_label(WARN, line);
+                        } else {
+                            ui.label(line);
+                        }
+                    }
+                });
+        };
+        section(ui, "Conflicts", &review.conflicts.lines, true);
+        section(ui, "Violations", &review.violations, true);
+        section(ui, "Ambiguities", &review.ambiguities, true);
+        section(ui, "Moves as a consequence", &review.consequences, false);
+        section(ui, "Alternatives", &review.alternatives, false);
+        section(ui, "Proposed values", &review.proposed, false);
+        section(ui, "Existing elements changed", &review.existing, false);
+        section(ui, "Changes", &review.diff, false);
+        if review.provisional {
+            ui.label("The result rests on Proposed values.");
+        }
+        let blocked = !review.blocked.is_empty();
+        if blocked {
+            ui.colored_label(
+                WARN,
+                format!("Cannot be committed: {}.", review.blocked.join("; ")),
+            );
         }
         let mut done = None;
         ui.horizontal(|ui| {
-            if ui.button("Confirm").clicked() {
+            if ui
+                .add_enabled(!blocked, egui::Button::new("Confirm"))
+                .clicked()
+            {
                 done = Some(true);
             }
             if ui.button("Discard").clicked() {
                 done = Some(false);
             }
         });
-        match (done, &self.session) {
-            (Some(true), Some(session)) => {
-                self.message = match session.commit(pending) {
-                    Ok(version) => format!("{what}: committed as version {version}."),
-                    Err(e) => format!("{what}: not committed: {e}"),
-                };
-                self.release();
-            }
-            (Some(_), _) => {
-                self.message = format!("{what}: discarded.");
-                self.release();
-            }
-            (None, _) => {}
-        }
+        let Some(confirm) = done else {
+            return;
+        };
+        let Some((what, review)) = self.pending.take() else {
+            return;
+        };
+        self.message = match (&self.session, confirm) {
+            (Some(session), true) => match session.commit(&review.confirm()) {
+                Ok(version) => format!("{what}: committed as version {version}."),
+                Err(e) => format!("{what}: not committed: {e}"),
+            },
+            _ => format!("{what}: discarded."),
+        };
+        self.release();
     }
 
     fn opened(&mut self, result: Result<Session, archviz_cli::CliError>) {
@@ -528,15 +584,8 @@ impl App {
             describe(&self.scene, self.plan.selected)
         ));
         self.dimension_box(ui);
-        self.confirm(ui);
+        self.review(ui);
         self.interview(ui);
-        if !self.proposal.is_empty() {
-            ui.separator();
-            ui.label("Last drag, proposed and not committed (review is T-204):");
-            for line in &self.proposal {
-                ui.label(line);
-            }
-        }
     }
 
     fn plan(&mut self, ui: &mut egui::Ui) {
@@ -558,12 +607,10 @@ impl App {
         };
         match self.plan.show(ui, scene) {
             Event::None => {}
-            Event::Move(action) => {
-                self.proposal = match session.propose(*action) {
-                    Ok(pending) => pending.echo(),
-                    Err(e) => vec![e],
-                };
-            }
+            Event::Move(action) => match session.propose(*action) {
+                Ok(pending) => self.hold("Move", pending),
+                Err(e) => self.message = format!("Move: {e}"),
+            },
             Event::Run(run) => self.propose_run(&run),
             Event::Refused(why) => self.message = format!("Point not placed: {why}."),
             Event::Picked(dimension::Pick::First) => {}
