@@ -481,7 +481,7 @@
           "additionalProperties": false,
           "properties": {
             "args": {
-              "$ref": "#/$defs/NoArgs"
+              "$ref": "#/$defs/RemoveConstraint"
             },
             "id": {
               "$ref": "#/$defs/Uuid"
@@ -2442,6 +2442,19 @@
           "type": "object"
         }
       ]
+    },
+    "RemoveConstraint": {
+      "additionalProperties": false,
+      "description": "Removes a constraint (Q-82). Refused while an Equal names it.",
+      "properties": {
+        "constraint": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "constraint"
+      ],
+      "type": "object"
     },
     "SetConstraintValue": {
       "additionalProperties": false,

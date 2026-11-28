@@ -41,8 +41,8 @@ pub use canonical::{
 pub use clearance::{ClearanceError, ClearanceRequest, clearance_resolve, wall_normal_axis};
 pub use command::{
     Action, Command, CommandError, CreateNode, CreateOpening, DimensionTarget, Motion,
-    MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
-    SetVariantSelection, SetWallLayers, apply,
+    MoveOccurrence, MoveOpening, MoveWall, NoArgs, RemoveConstraint, SetConstraintValue,
+    SetProjectUnits, SetStorey, SetVariantSelection, SetWallLayers, apply,
 };
 pub use create::{
     AddConstraint, CreateCeiling, CreateDatum, CreateElementType, CreateMaterial, CreateRoof,

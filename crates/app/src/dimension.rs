@@ -296,6 +296,9 @@ pub struct ConflictReport {
     /// One line per conflict: the constraint, then each it disagrees with.
     pub lines: Vec<String>,
     pub walls: BTreeSet<Uuid>,
+    /// Every constraint named, the proposed ones included; the plan draws
+    /// those the document holds in red (T-204d).
+    pub constraints: BTreeSet<Uuid>,
 }
 
 /// Names every constraint in `pending`'s conflicts (7.5): those already in
@@ -340,6 +343,7 @@ pub fn conflicts(doc: &Document, pending: &Pending) -> ConflictReport {
     // The solver reports whichever constraint it processes later (by id);
     // the line names the proposed ones first, so it reads the same each time.
     let mut lines = Vec::new();
+    let mut named = BTreeSet::new();
     for c in pending.result["conflicts"].as_array().into_iter().flatten() {
         let Some(id) = ids(&c["constraint"]) else {
             continue;
@@ -347,12 +351,14 @@ pub fn conflicts(doc: &Document, pending: &Pending) -> ConflictReport {
         let mut involved: Vec<Uuid> = vec![id];
         involved.extend(c["with"].as_array().into_iter().flatten().filter_map(ids));
         involved.sort_by_key(|id| (doc.constraints.contains_key(id), *id));
+        named.extend(involved.iter().copied());
         let mut names = involved.into_iter().map(&mut name);
         let first = names.next().unwrap_or_default();
         let rest: Vec<String> = names.collect();
         lines.push(format!("{first} conflicts with {}", rest.join(" and ")));
     }
     report.lines = lines;
+    report.constraints = named;
     report
 }
 

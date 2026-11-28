@@ -490,13 +490,13 @@ mod tests {
         let mut h = History::new(genesis());
         let failing = commit(vec![
             cmd(1, create_node(0, 0)),
-            cmd(2, Action::RemoveConstraint(NoArgs {})),
+            cmd(2, Action::DeleteEntity(NoArgs {})),
         ]);
         assert_eq!(
             h.apply_entry(&entry(1, failing)),
             Err(LogError::Command {
                 index: 1,
-                error: CommandError::NotYetImplemented("remove_constraint")
+                error: CommandError::NotYetImplemented("delete_entity")
             })
         );
         assert_eq!(bytes(h.document()), bytes(&genesis()));

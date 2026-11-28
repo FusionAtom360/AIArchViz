@@ -7,7 +7,8 @@
 //! T-105 implements the commands that are pure data edits (Q-9): CreateNode,
 //! SetStorey, SetVariantSelection and SetProjectUnits; T-108 adds
 //! CreateOpening (Q-23); T-120b adds CreateWall, AddConstraint,
-//! PlaceOccurrence and the creation commands of DEC-3 (module `create`).
+//! PlaceOccurrence and the creation commands of DEC-3 (module `create`);
+//! T-204d adds RemoveConstraint (Q-82).
 //! Every other v1 command parses with empty `args` and returns
 //! [`CommandError::NotYetImplemented`]; its arguments are defined by the task
 //! that implements it.
@@ -182,6 +183,13 @@ pub struct SetWallLayers {
     pub left_extent: Sourced<Length>,
 }
 
+/// Removes a constraint (Q-82). Refused while an Equal names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveConstraint {
+    pub constraint: Uuid,
+}
+
 /// Sets the unit of bare numbers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -211,7 +219,7 @@ pub enum Action {
     RotateOccurrence(NoArgs),
     DeleteEntity(NoArgs),
     AddConstraint(AddConstraint),
-    RemoveConstraint(NoArgs),
+    RemoveConstraint(RemoveConstraint),
     SetConstraintValue(SetConstraintValue),
     SetStorey(SetStorey),
     ApplyOperator(NoArgs),
@@ -362,6 +370,8 @@ pub enum CommandError {
         value: Length,
         nearest: Length,
     },
+    /// The constraint cannot be removed while the Equal `by` names it (Q-82).
+    ConstraintInUse { constraint: Uuid, by: Uuid },
 }
 
 impl fmt::Display for CommandError {
@@ -389,11 +399,31 @@ impl fmt::Display for CommandError {
             CommandError::InvalidOption { slot, option } => {
                 write!(f, "{option} is not an option of variant slot {slot}")
             }
+            CommandError::ConstraintInUse { constraint, by } => write!(
+                f,
+                "constraint {constraint} is named by the Equal {by}; remove that first"
+            ),
         }
     }
 }
 
 impl std::error::Error for CommandError {}
+
+/// Removes `id`, unless an Equal names it (Q-82 (a)).
+fn remove_constraint(doc: &mut Document, id: Uuid) -> Result<(), CommandError> {
+    if !doc.constraints.contains_key(&id) {
+        return Err(CommandError::UnknownEntity(id));
+    }
+    let by = doc.constraints.iter().find_map(|(other, c)| match c.kind {
+        ConstraintKind::Equal { first, second } if first == id || second == id => Some(*other),
+        _ => None,
+    });
+    if let Some(by) = by {
+        return Err(CommandError::ConstraintInUse { constraint: id, by });
+    }
+    doc.constraints.remove(&id);
+    Ok(())
+}
 
 fn set_dimension(doc: &mut Document, args: &SetConstraintValue) -> Result<(), CommandError> {
     let value = args.value;
@@ -600,6 +630,7 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
         }
         Action::CreateWall(args) => create::create_wall(&mut doc, args, new_id)?,
         Action::AddConstraint(args) => create::add_constraint(&mut doc, args, new_id(0))?,
+        Action::RemoveConstraint(args) => remove_constraint(&mut doc, args.constraint)?,
         Action::PlaceOccurrence(args) => create::place_occurrence(&mut doc, args, new_id(0))?,
         Action::CreateDatum(args) => create::create_datum(&mut doc, args, new_id(0))?,
         Action::CreateMaterial(args) => create::create_material(&mut doc, args, new_id(0))?,
@@ -929,7 +960,6 @@ pub(crate) mod tests {
             Action::MergeWalls(n()),
             Action::RotateOccurrence(n()),
             Action::DeleteEntity(n()),
-            Action::RemoveConstraint(n()),
             Action::ApplyOperator(n()),
             Action::RemoveOperator(n()),
         ]
@@ -938,7 +968,7 @@ pub(crate) mod tests {
     #[test]
     fn the_rest_of_the_v1_set_is_not_yet_implemented() {
         let actions = unimplemented_actions();
-        assert_eq!(actions.len() + 13, 20, "8.2 lists 20 commands");
+        assert_eq!(actions.len() + 14, 20, "8.2 lists 20 commands");
         for action in actions {
             let kind = action.kind();
             assert_eq!(
@@ -946,6 +976,90 @@ pub(crate) mod tests {
                 Err(CommandError::NotYetImplemented(kind))
             );
         }
+    }
+
+    /// Q-82 (a): RemoveConstraint removes exactly that constraint, refuses
+    /// an unknown id, and refuses while an Equal names it.
+    #[test]
+    fn remove_constraint_removes_it_unless_an_equal_names_it() -> Result<(), CommandError> {
+        use crate::document::{Axis, Constraint, ConstraintKind, ConstraintStatus};
+        let (mut doc, wall, a) = with_wall();
+        let remove = |n: u8, id: Uuid| {
+            cmd(
+                n,
+                Action::RemoveConstraint(RemoveConstraint { constraint: id }),
+            )
+        };
+        let after = apply(&doc, &remove(1, uid(28)))?;
+        assert!(!after.constraints.contains_key(&uid(28)));
+        let mut expected = doc.clone();
+        expected.constraints.remove(&uid(28));
+        assert_eq!(after, expected, "nothing else changes");
+        assert_eq!(
+            apply(&doc, &remove(2, uid(99))),
+            Err(CommandError::UnknownEntity(uid(99)))
+        );
+        // Two distances and an Equal naming them.
+        let distance = |value: i64| Constraint {
+            kind: ConstraintKind::Distance {
+                a: Reference::Node { node: a },
+                b: Reference::WallCenter { wall },
+                axis: Axis::X,
+                value: Length::from_nanometers(value),
+                tolerance: None,
+            },
+            status: ConstraintStatus::Driving,
+            source: Source::UserStated,
+            provenance: None,
+        };
+        doc.constraints.insert(uid(40), distance(0));
+        doc.constraints.insert(uid(41), distance(0));
+        doc.constraints.insert(
+            uid(42),
+            Constraint {
+                kind: ConstraintKind::Equal {
+                    first: uid(40),
+                    second: uid(41),
+                },
+                status: ConstraintStatus::Driving,
+                source: Source::UserStated,
+                provenance: None,
+            },
+        );
+        for id in [uid(40), uid(41)] {
+            assert_eq!(
+                apply(&doc, &remove(3, id)),
+                Err(CommandError::ConstraintInUse {
+                    constraint: id,
+                    by: uid(42)
+                })
+            );
+        }
+        // Remove the Equal first, then either distance goes.
+        let without_equal = apply(&doc, &remove(4, uid(42)))?;
+        let without = apply(&without_equal, &remove(5, uid(40)))?;
+        assert!(!without.constraints.contains_key(&uid(40)));
+        assert!(without.constraints.contains_key(&uid(41)));
+        Ok(())
+    }
+
+    #[test]
+    fn remove_constraint_wire_form() -> Result<(), String> {
+        let c = cmd(
+            1,
+            Action::RemoveConstraint(RemoveConstraint { constraint: uid(7) }),
+        );
+        let text = to_canonical_json(&c).map_err(|e| e.to_string())?;
+        assert!(
+            text.contains(&format!(r#""args":{{"constraint":"{}"}}"#, uid(7))),
+            "{text}"
+        );
+        assert!(text.contains(r#""kind":"remove_constraint""#), "{text}");
+        let back: Command = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        assert_eq!(back, c);
+        let empty = text.replace(&format!(r#"{{"constraint":"{}"}}"#, uid(7)), "{}");
+        assert!(serde_json::from_str::<Command>(&empty).is_err());
+        Ok(())
     }
 
     #[test]

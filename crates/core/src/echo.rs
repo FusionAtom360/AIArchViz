@@ -675,7 +675,7 @@ impl<'a> Names<'a> {
             Action::RotateOccurrence(_) => "Rotate an occurrence".into(),
             Action::DeleteEntity(_) => "Delete an entity".into(),
             Action::AddConstraint(a) => self.add_constraint(a),
-            Action::RemoveConstraint(_) => "Remove a constraint".into(),
+            Action::RemoveConstraint(r) => self.remove_constraint(r.constraint),
             Action::SetConstraintValue(e) => format!("Set {}", self.dimension_change(e)),
             Action::SetStorey(a) => {
                 let values = format!(
@@ -837,6 +837,23 @@ impl<'a> Names<'a> {
         text
     }
 
+    /// `Remove the distance from ... along X (14'-6 1/2")`: the constraint
+    /// as it was before, with its value (Q-82).
+    fn remove_constraint(&self, id: Uuid) -> String {
+        match self.get(|x| &x.constraints, id) {
+            Some(c) => {
+                let value = match c.kind {
+                    ConstraintKind::Distance { value, .. }
+                    | ConstraintKind::Fixed { value, .. }
+                    | ConstraintKind::MinClearance { value, .. } => format!(" ({})", len(value)),
+                    _ => String::new(),
+                };
+                format!("Remove {}{value}", self.constraint(&c.kind, 0))
+            }
+            None => "Remove an unknown constraint".into(),
+        }
+    }
+
     fn add_constraint(&self, a: &AddConstraint) -> String {
         let mut text = match &a.kind {
             ConstraintKind::Distance {
@@ -996,8 +1013,8 @@ pub(crate) mod tests {
     use crate::canonical::to_canonical_json;
     use crate::command::tests::cmd;
     use crate::command::{
-        CreateNode, CreateOpening, MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetProjectUnits,
-        SetStorey, SetVariantSelection, SetWallLayers, apply,
+        CreateNode, CreateOpening, MoveOccurrence, MoveOpening, MoveWall, NoArgs, RemoveConstraint,
+        SetProjectUnits, SetStorey, SetVariantSelection, SetWallLayers, apply,
     };
     use crate::create::{
         CreateCeiling, CreateDatum, CreateElementType, CreateMaterial, CreateSlab, CreateSpace,
@@ -1335,8 +1352,8 @@ pub(crate) mod tests {
                 r#"Add the distance from datum "East" to W-003 center along X: 4'-0""#,
             ),
             (
-                Action::RemoveConstraint(none.clone()),
-                "Remove a constraint",
+                Action::RemoveConstraint(RemoveConstraint { constraint: c2 }),
+                r#"Remove the distance from W-001 center to W-002 center along X (8'-0")"#,
             ),
             (
                 Action::SetConstraintValue(SetConstraintValue {

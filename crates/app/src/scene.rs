@@ -76,6 +76,8 @@ pub struct Scene {
     pub slabs: Vec<SlabShape>,
     pub datums: Vec<DatumShape>,
     pub nodes: Vec<World>,
+    /// Every Distance constraint, laid out for drawing (T-204d).
+    pub dimensions: Vec<crate::dimension_layout::Placed>,
 }
 
 fn xy(p: &Point) -> World {
@@ -206,6 +208,7 @@ impl Scene {
             .values()
             .map(|n| (n.x.nanometers(), n.y.nanometers()))
             .collect();
+        scene.dimensions = crate::dimension_layout::layout(doc, &scene);
         Ok(scene)
     }
 

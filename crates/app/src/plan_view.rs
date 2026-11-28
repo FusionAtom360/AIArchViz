@@ -3,10 +3,12 @@
 //! (scroll), selects (click) and drags entities into move commands (left
 //! drag), and in wall mode draws runs of walls from snapped clicks
 //! (T-202b, draw.rs), and in dimension mode picks references for a
-//! dimension (T-203, dimension.rs). Floats appear only between the viewport and the painter; every
+//! dimension (T-203, dimension.rs). Every Distance constraint is drawn as a
+//! dimension where dimension_layout.rs places it; a click selects one and
+//! Delete proposes its removal (T-204d). Floats appear only between the viewport and the painter; every
 //! value that leaves this widget as a command argument is snapped first.
 
-use archviz_core::{Axis, DatumGeometry, Function, Length, format_length};
+use archviz_core::{Axis, ConstraintStatus, DatumGeometry, Function, Length, format_length};
 use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Pos2, Sense, Shape, Stroke, StrokeKind,
 };
@@ -16,6 +18,7 @@ use std::collections::BTreeSet;
 use archviz_core::Uuid;
 
 use crate::dimension::{DimensionTool, Mark, Pick, Picked, mark, pick};
+use crate::dimension_layout::Side;
 use crate::drag::{Drag, Preview};
 use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
@@ -31,6 +34,13 @@ const PAD: f64 = 64.0;
 /// Dimension mode: the reference a click would pick, and the first pick.
 pub const HOVER: Color32 = Color32::from_rgb(0, 140, 255);
 pub const PICKED: Color32 = Color32::from_rgb(0, 190, 160);
+/// A selected dimension, and one named by a proposal's conflicts.
+pub const SELECTED: Color32 = Color32::from_rgb(0, 140, 255);
+pub const CONFLICT: Color32 = Color32::from_rgb(230, 40, 40);
+/// Pixels from the plan's bounding box to the first row of dimensions, and
+/// between rows.
+const DIMENSION_GAP: f64 = 28.0;
+const DIMENSION_ROW: f64 = 26.0;
 
 /// What the widget reports to the app after a frame.
 pub enum Event {
@@ -43,6 +53,9 @@ pub enum Event {
     Refused(&'static str),
     /// A click in dimension mode picked a reference, or was refused.
     Picked(Pick),
+    /// Delete was pressed with this dimension selected; the app proposes
+    /// RemoveConstraint (T-204d).
+    Remove(Uuid),
 }
 
 pub struct PlanView {
@@ -68,6 +81,13 @@ pub struct PlanView {
     pub free: BTreeSet<Uuid>,
     /// Walls named by a pending proposal's conflicts (7.5).
     pub conflicting: BTreeSet<Uuid>,
+    /// Constraints named by a pending proposal's conflicts; their
+    /// dimensions are drawn red.
+    pub conflicting_dimensions: BTreeSet<Uuid>,
+    /// The selected dimension (its constraint), in select mode.
+    pub selected_dimension: Option<Uuid>,
+    /// Where each dimension was drawn last frame, for clicks.
+    dimension_hits: Vec<(Uuid, egui::Rect)>,
 }
 
 fn pos(s: Screen) -> Pos2 {
@@ -100,6 +120,9 @@ impl PlanView {
             held: None,
             free: BTreeSet::new(),
             conflicting: BTreeSet::new(),
+            conflicting_dimensions: BTreeSet::new(),
+            selected_dimension: None,
+            dimension_hits: Vec::new(),
         }
     }
 
@@ -129,9 +152,13 @@ impl PlanView {
             }
             return s;
         }
-        "Select: click to select, drag a wall, opening or item to move it; \
-         scroll to zoom, right or middle drag to pan"
-            .to_string()
+        let mut s = "Select: click to select, drag a wall, opening or item to move it; \
+                     scroll to zoom, right or middle drag to pan"
+            .to_string();
+        if self.selected_dimension.is_some() {
+            s.push_str("; Delete removes the selected dimension");
+        }
+        s
     }
 
     /// The first pick, highlighted until the dimension is proposed or
@@ -188,12 +215,18 @@ impl PlanView {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
         let origin = screen(rect.center());
+        // Fit leaves room for the rows of dimensions outside the plan.
+        let rows = scene.dimensions.iter().map(|d| d.row + 1).max();
+        let margin = 40.0
+            + rows.map_or(0.0, |n| {
+                DIMENSION_GAP + DIMENSION_ROW * f64::from(u32::try_from(n).unwrap_or(u32::MAX))
+            });
         let viewport = self.viewport.get_or_insert_with(|| match scene.bounds() {
             Some((min, max)) => Viewport::fit(
                 min,
                 max,
                 (f64::from(rect.width()), f64::from(rect.height())),
-                40.0,
+                margin,
                 origin,
             ),
             None => Viewport::new((0, 0), 1.0 / 25_400_000.0, origin),
@@ -218,6 +251,12 @@ impl PlanView {
         let viewport = viewport.clone();
         self.pointer = response.hover_pos().map(|p| viewport.to_world(screen(p)));
 
+        // A dimension whose constraint is gone is no longer selected.
+        if let Some(id) = self.selected_dimension
+            && !scene.dimensions.iter().any(|d| d.constraint == id)
+        {
+            self.selected_dimension = None;
+        }
         let mut event = Event::None;
         let at = response
             .interact_pointer_pos()
@@ -281,7 +320,8 @@ impl PlanView {
         let painter = painter.with_clip_rect(rect);
         let bg = ui.visuals().extreme_bg_color;
         painter.rect_filled(rect, 0.0, bg);
-        self.paint(&painter, &viewport, scene, rect, ui.visuals().dark_mode, bg);
+        self.dimension_hits =
+            self.paint(&painter, &viewport, scene, rect, ui.visuals().dark_mode, bg);
         event
     }
 
@@ -296,7 +336,24 @@ impl PlanView {
     ) -> Event {
         let mut event = Event::None;
         if response.clicked_by(PointerButton::Primary) {
-            self.selected = at.and_then(|w| scene.pick(w, viewport.nm(PICK_PX)));
+            // A dimension, drawn over the plan, is picked first.
+            let on = response.interact_pointer_pos();
+            self.selected_dimension = on.and_then(|p| {
+                self.dimension_hits
+                    .iter()
+                    .find(|(_, r)| r.contains(p))
+                    .map(|(id, _)| *id)
+            });
+            self.selected = match self.selected_dimension {
+                Some(_) => None,
+                None => at.and_then(|w| scene.pick(w, viewport.nm(PICK_PX))),
+            };
+        }
+        if let Some(id) = self.selected_dimension
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|i| i.key_pressed(egui::Key::Delete))
+        {
+            event = Event::Remove(id);
         }
         if response.drag_started_by(PointerButton::Primary) {
             // The press position, not where the drag threshold was crossed.
@@ -305,6 +362,7 @@ impl PlanView {
                 .map(|p| viewport.to_world(screen(p)));
             let picked = press.and_then(|w| scene.pick(w, viewport.nm(PICK_PX)).map(|e| (e, w)));
             self.selected = picked.map(|(e, _)| e);
+            self.selected_dimension = None;
             self.drag = picked.and_then(|(e, w)| Drag::begin(scene, e, w));
         }
         if let (Some(drag), Some(at)) = (&self.drag, at)
@@ -334,7 +392,7 @@ impl PlanView {
         rect: egui::Rect,
         dark: bool,
         bg: Color32,
-    ) {
+    ) -> Vec<(Uuid, egui::Rect)> {
         let lo = Screen {
             x: f64::from(rect.min.x) - PAD,
             y: f64::from(rect.min.y) - PAD,
@@ -597,7 +655,144 @@ impl PlanView {
         if let Some(f) = self.first_pick() {
             highlight(f, PICKED);
         }
+        let gray = if dark {
+            Color32::from_gray(140)
+        } else {
+            Color32::from_gray(120)
+        };
+        let hits = self.paint_dimensions(painter, v, scene, rect, (lo, hi), (ink, gray), &font);
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, faint), StrokeKind::Inside);
+        hits
+    }
+
+    /// Draws every dimension of the scene where the layout puts it: rows
+    /// outside the plan's bounding box, `DIMENSION_GAP` px out and then
+    /// `DIMENSION_ROW` px apart. A driving dimension is solid in ink with
+    /// its value; a reference one dashed in gray with its measured value in
+    /// parentheses; a selected one blue; a conflicting one red. Returns the
+    /// rectangle each one occupies, for clicks.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_dimensions(
+        &self,
+        painter: &egui::Painter,
+        v: &Viewport,
+        scene: &Scene,
+        rect: egui::Rect,
+        (lo, hi): (Screen, Screen),
+        (ink, gray): (Color32, Color32),
+        font: &FontId,
+    ) -> Vec<(Uuid, egui::Rect)> {
+        let mut hits = Vec::new();
+        let Some((min, max)) = scene.bounds() else {
+            return hits;
+        };
+        // min is the bottom left on screen, max the top right.
+        let (smin, smax) = (v.to_screen(min), v.to_screen(max));
+        for d in &scene.dimensions {
+            let reference = d.status == ConstraintStatus::Reference;
+            let selected = self.selected_dimension == Some(d.constraint);
+            let color = if self.conflicting_dimensions.contains(&d.constraint) {
+                CONFLICT
+            } else if selected {
+                SELECTED
+            } else if reference {
+                gray
+            } else {
+                ink
+            };
+            let stroke = Stroke::new(if selected { 2.0 } else { 1.0 }, color);
+            let segment = |p: Screen, q: Screen| {
+                if let Some((p, q)) = clip_segment(p, q, lo, hi) {
+                    if reference {
+                        painter.add(Shape::dashed_line(&[pos(p), pos(q)], stroke, 5.0, 3.0));
+                    } else {
+                        painter.line_segment([pos(p), pos(q)], stroke);
+                    }
+                }
+            };
+            let horizontal = d.axis == Axis::X;
+            let offset =
+                DIMENSION_GAP + DIMENSION_ROW * f64::from(u32::try_from(d.row).unwrap_or(u32::MAX));
+            // Screen coordinates across the line: the box edge, and which
+            // way is outward.
+            let (edge, outward) = match d.side {
+                Side::Below => (smin.y, 1.0),
+                Side::Above => (smax.y, -1.0),
+                Side::Left => (smin.x, -1.0),
+                Side::Right => (smax.x, 1.0),
+            };
+            let base = edge + outward * offset;
+            // The screen point at `along` on the axis and `across` pixels.
+            let at = |along: i64, across: f64| {
+                if horizontal {
+                    Screen {
+                        x: v.to_screen((along, 0)).x,
+                        y: across,
+                    }
+                } else {
+                    Screen {
+                        x: across,
+                        y: v.to_screen((0, along)).y,
+                    }
+                }
+            };
+            for (end, foot) in d.ends.iter().zip(d.feet) {
+                let start = match foot {
+                    Some(f) if horizontal => v.to_screen((0, f)).y + outward * 3.0,
+                    Some(f) => v.to_screen((f, 0)).x + outward * 3.0,
+                    None => edge,
+                };
+                segment(at(*end, start), at(*end, base + outward * 4.0));
+                // The tick: a short slash through the dimension line.
+                let c = at(*end, base);
+                segment(
+                    Screen {
+                        x: c.x - 4.0,
+                        y: c.y + 4.0,
+                    },
+                    Screen {
+                        x: c.x + 4.0,
+                        y: c.y - 4.0,
+                    },
+                );
+            }
+            let (a, b) = (at(d.ends[0], base), at(d.ends[1], base));
+            segment(a, b);
+            let mid = (i128::from(d.ends[0]) + i128::from(d.ends[1])) / 2;
+            let mid = at(i64::try_from(mid).unwrap_or(d.ends[0]), base);
+            let galley = painter.layout_no_wrap(d.text.clone(), font.clone(), color);
+            let size = galley.size();
+            let text_rect = if horizontal {
+                let r = Align2::CENTER_BOTTOM.anchor_size(pos(mid) - egui::vec2(0.0, 2.0), size);
+                if rect.contains(r.center()) {
+                    painter.galley(r.min, galley, color);
+                }
+                r
+            } else {
+                // Read from below, left of the line.
+                let anchor = pos(mid) - egui::vec2(2.0, 0.0);
+                let r = egui::Rect::from_center_size(
+                    anchor - egui::vec2(size.y / 2.0, 0.0),
+                    egui::vec2(size.y, size.x),
+                );
+                if rect.contains(r.center()) {
+                    painter.add(
+                        // `pos` is the unrotated top left; the bottom center
+                        // is the pivot, placed at `anchor`.
+                        egui::epaint::TextShape::new(
+                            anchor - egui::vec2(size.x / 2.0, size.y),
+                            galley,
+                            color,
+                        )
+                        .with_angle_and_anchor(-std::f32::consts::FRAC_PI_2, Align2::CENTER_BOTTOM),
+                    );
+                }
+                r
+            };
+            let line = egui::Rect::from_two_pos(pos(a), pos(b)).expand(PICK_PX as f32);
+            hits.push((d.constraint, line.union(text_rect)));
+        }
+        hits
     }
 }
 

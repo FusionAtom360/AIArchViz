@@ -31,8 +31,13 @@
 //! text boxes four times egui's default width; every message goes to the
 //! one status line in the bottom bar, after the mode's instruction and
 //! before the pointer coordinates (status.rs).
+//!
+//! T-204d (Q-81 (b)(i), (c)(i), Q-82): every Distance constraint is drawn on
+//! the plan as a dimension (dimension_layout.rs); a click selects one and
+//! Delete proposes RemoveConstraint for it, reviewed in the panel.
 
 mod dimension;
+mod dimension_layout;
 mod drag;
 mod draw;
 mod interview;
@@ -48,7 +53,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use archviz_core::{Action, Axis, Length, ProjectUnit, Source, Uuid, format_length};
+use archviz_core::{
+    Action, Axis, Length, ProjectUnit, RemoveConstraint, Source, Uuid, format_length,
+};
 
 use eframe::egui;
 use plan_view::{Event, PlanView};
@@ -210,6 +217,7 @@ impl App {
             return;
         }
         self.plan.conflicting = review.conflicts.walls.clone();
+        self.plan.conflicting_dimensions = review.conflicts.constraints.clone();
         self.pending = Some((what.to_string(), review));
     }
 
@@ -217,6 +225,7 @@ impl App {
     fn release(&mut self) {
         self.pending = None;
         self.plan.conflicting.clear();
+        self.plan.conflicting_dimensions.clear();
     }
 
     /// Proposes `commands`; on success it waits for confirmation.
@@ -608,10 +617,11 @@ impl App {
             }
         });
         ui.separator();
-        ui.label(format!(
-            "Selection: {}",
-            describe(&self.scene, self.plan.selected)
-        ));
+        let selection = match self.plan.selected_dimension {
+            Some(id) => describe_dimension(&self.scene, id),
+            None => describe(&self.scene, self.plan.selected),
+        };
+        ui.label(format!("Selection: {selection}"));
         self.dimension_box(ui);
         self.review(ui);
         self.interview(ui);
@@ -642,6 +652,13 @@ impl App {
                 Err(e) => self.message = format!("Move: {e}"),
             },
             Event::Run(run) => self.propose_run(&run),
+            Event::Remove(constraint) => {
+                let action = Action::RemoveConstraint(RemoveConstraint { constraint });
+                match session.propose(action) {
+                    Ok(pending) => self.hold("Remove dimension", pending),
+                    Err(e) => self.message = format!("Remove dimension: {e}"),
+                }
+            }
             Event::Refused(why) => self.message = format!("Point not placed: {why}."),
             Event::Picked(dimension::Pick::First) => {}
             Event::Picked(dimension::Pick::Ready(pair)) => {
@@ -652,6 +669,20 @@ impl App {
             }
         }
     }
+}
+
+/// A selected dimension in words: the constraint and its value.
+fn describe_dimension(scene: &Built, id: Uuid) -> String {
+    let Some((_, Ok(s))) = scene else {
+        return "nothing".to_string();
+    };
+    s.dimensions
+        .iter()
+        .find(|d| d.constraint == id)
+        .map_or_else(
+            || "nothing".to_string(),
+            |d| format!("dimension {} = {} (Delete removes it)", d.name, d.text),
+        )
 }
 
 /// The selection in words.
@@ -1087,6 +1118,220 @@ mod tests {
         assert!(!click_on(&ctx, &mut app, "Propose"));
         assert!(app.pending.is_some(), "{}", app.message);
         assert!(app.dimension.is_none() && app.plan.first_pick().is_none());
+    }
+
+    /// Runs a few frames with the pointer at `pointer` and `events` in the
+    /// first; the shapes of the last.
+    fn shapes_after(
+        ctx: &Context,
+        app: &mut App,
+        pointer: Pos2,
+        events: Vec<egui::Event>,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let mut shapes = Vec::new();
+        for n in 0..3 {
+            let mut i = input(pointer);
+            if n == 0 {
+                i.events.extend(events.clone());
+            }
+            let mut o = ctx.run_ui(i, |ui| app.layout(ui));
+            o.textures_delta.clear();
+            shapes = o.shapes;
+        }
+        shapes
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// The texts drawn in the plan (left of the side panel, between the
+    /// top bar and the status line), sorted.
+    fn plan_texts(ctx: &Context, app: &mut App) -> Vec<(String, Rect)> {
+        let mut out: Vec<(String, Rect)> = texts(ctx, app)
+            .into_iter()
+            .filter(|(_, r)| r.max.x < WIDTH - 400.0 && r.min.y > 200.0 && r.max.y < HEIGHT - 60.0)
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn values(texts: &[(String, Rect)]) -> Vec<&str> {
+        texts
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .filter(|t| t.contains('\''))
+            .collect()
+    }
+
+    /// Done when: the T-203 room shows its four dimensions with the values
+    /// typed; selecting one and pressing Delete opens a review whose echo
+    /// names the constraint, and Confirm removes it and leaves its wall
+    /// underconstrained (orange).
+    #[test]
+    fn the_t203_room_shows_its_dimensions_and_delete_removes_one() {
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = crate::session::dimension_tests::t203_room("dimensions-on-plan");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        assert!(app.session.is_some(), "{}", app.message);
+
+        let drawn = plan_texts(&ctx, &mut app);
+        assert_eq!(
+            values(&drawn),
+            ["0'-0\"", "0'-0\"", "11'-3\"", "14'-6 1/2\""],
+            "{drawn:?}"
+        );
+        assert!(
+            app.plan.free.is_empty(),
+            "the room starts fully constrained"
+        );
+
+        // Click the 14'-6 1/2" dimension: it is selected, nothing else is.
+        let (id, kind) = doc
+            .constraints
+            .iter()
+            .find(|(_, c)| {
+                matches!(c.kind, archviz_core::ConstraintKind::Distance { value, .. }
+                    if value.nanometers() == (14 * 12 + 6) * 25_400_000 + 12_700_000)
+            })
+            .map(|(id, c)| (*id, c.kind.clone()))
+            .unwrap_or_else(|| panic!("the 14'-6 1/2\" constraint"));
+        click_on(&ctx, &mut app, "14'-6 1/2\"");
+        assert_eq!(app.plan.selected_dimension, Some(id));
+        assert_eq!(app.plan.selected, None);
+        let at = drawn
+            .iter()
+            .find(|(t, _)| t == "14'-6 1/2\"")
+            .map(|(_, r)| r.center())
+            .unwrap_or_else(|| panic!("drawn"));
+        let shapes = shapes_after(&ctx, &mut app, at, Vec::new());
+        assert!(crate::plan_view::tests::drawn(
+            &shapes,
+            crate::plan_view::SELECTED
+        ));
+
+        // Delete opens a review whose echo names the constraint.
+        shapes_after(&ctx, &mut app, at, vec![key(egui::Key::Delete)]);
+        let (what, review) = app
+            .pending
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}", app.message));
+        assert_eq!(what, "Remove dimension");
+        assert_eq!(
+            review.echo,
+            ["Remove the distance from W-004 right face to W-002 right face along X (14'-6 1/2\")"]
+        );
+        assert_eq!(
+            review.echo,
+            [format!(
+                "Remove {} (14'-6 1/2\")",
+                archviz_core::describe_constraint(&doc, &kind)
+            )]
+        );
+        let version = app.session.as_ref().map(Session::version);
+        assert!(
+            app.session
+                .as_ref()
+                .is_some_and(|s| s.document().constraints.contains_key(&id)),
+            "nothing is removed before Confirm"
+        );
+
+        // Confirm removes it; W-002 (the east wall) is underconstrained and
+        // drawn orange; the other three dimensions remain.
+        click_on(&ctx, &mut app, "Confirm");
+        assert!(app.pending.is_none(), "{}", app.message);
+        let session = app.session.as_ref().unwrap_or_else(|| panic!("open"));
+        assert_eq!(Some(session.version()), version.map(|v| v + 1));
+        let after = session.document();
+        assert!(!after.constraints.contains_key(&id));
+        assert_eq!(after.constraints.len(), doc.constraints.len() - 1);
+        let east = after
+            .walls
+            .iter()
+            .find(|(_, w)| w.label.to_string() == "W-002")
+            .map(|(id, _)| *id)
+            .unwrap_or_else(|| panic!("W-002"));
+        let drawn = plan_texts(&ctx, &mut app);
+        assert_eq!(values(&drawn), ["0'-0\"", "0'-0\"", "11'-3\""], "{drawn:?}");
+        assert!(app.plan.free.contains(&east), "{:?}", app.plan.free);
+        assert_eq!(app.plan.selected_dimension, None, "its dimension is gone");
+        let orange = shapes_after(&ctx, &mut app, Pos2::new(1200.0, 600.0), Vec::new())
+            .iter()
+            .any(|c| match &c.shape {
+                Shape::Path(p) => {
+                    p.stroke.color
+                        == egui::epaint::ColorMode::Solid(egui::Color32::from_rgb(240, 150, 0))
+                }
+                _ => false,
+            });
+        assert!(orange, "an underconstrained wall is drawn orange");
+    }
+
+    /// A proposal that conflicts with a dimension draws that dimension red
+    /// until it is discarded; Delete while a text box has focus removes
+    /// nothing.
+    #[test]
+    fn a_conflicting_dimension_is_red_and_delete_in_a_text_box_does_nothing() {
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = crate::session::dimension_tests::t203_room("dimensions-conflict");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        let (id, kind) = doc
+            .constraints
+            .iter()
+            .find(|(_, c)| {
+                matches!(c.kind, archviz_core::ConstraintKind::Distance { value, .. }
+                    if value.nanometers() == 135 * 25_400_000)
+            })
+            .map(|(id, c)| (*id, c.kind.clone()))
+            .unwrap_or_else(|| panic!("the 11'-3\" constraint"));
+        let pointer = Pos2::new(1200.0, 600.0);
+        let red = |shapes: &[egui::epaint::ClippedShape]| {
+            crate::plan_view::tests::drawn(shapes, crate::plan_view::CONFLICT)
+        };
+        assert!(!red(&shapes_after(&ctx, &mut app, pointer, Vec::new())));
+        let archviz_core::ConstraintKind::Distance { a, b, axis, .. } = kind else {
+            panic!("a distance")
+        };
+        app.propose_actions(
+            "Dimension 12'-0\"",
+            vec![Action::AddConstraint(archviz_core::AddConstraint {
+                kind: archviz_core::ConstraintKind::Distance {
+                    a,
+                    b,
+                    axis,
+                    value: Length::from_nanometers(144 * 25_400_000),
+                    tolerance: None,
+                },
+                status: None,
+                source: Source::UserStated,
+                provenance: None,
+            })],
+        );
+        assert!(app.pending.is_some(), "{}", app.message);
+        assert!(app.plan.conflicting_dimensions.contains(&id));
+        assert!(red(&shapes_after(&ctx, &mut app, pointer, Vec::new())));
+        click_on(&ctx, &mut app, "Discard");
+        assert!(app.plan.conflicting_dimensions.is_empty());
+        assert!(!red(&shapes_after(&ctx, &mut app, pointer, Vec::new())));
+
+        // Select the 11'-3" dimension, then focus the project folder box
+        // and press Delete: no proposal.
+        click_on(&ctx, &mut app, "11'-3\"");
+        assert_eq!(app.plan.selected_dimension, Some(id));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::unique(TOP_TEXT_BOXES[0])));
+        shapes_after(&ctx, &mut app, pointer, vec![key(egui::Key::Delete)]);
+        assert!(
+            app.pending.is_none(),
+            "Delete in a text box proposes nothing"
+        );
     }
 
     #[test]
