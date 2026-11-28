@@ -399,7 +399,22 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: a panel with the diff, violations, ambiguities, Proposed flags, consequence list and alternatives, the echo text, and confirm or discard.
 - Done when: no commit path bypasses this panel except the explicit auto\_commit\_unambiguous setting, which is off by default.
 
-**T-205 Underlay.** Spec 6.6. Depends on T-202.
+**T-204b Readable status and inputs.** Spec 5.3; Q-81 (a). Depends on T-204.
+
+- Build: the project folder, project name, building name and save-copy text boxes four times their current width. One status line, in the bottom bar: the current mode's instruction first (for example "pick the first reference"), then the last message (a commit, a discard, a refusal or an error), then the pointer coordinates; the top bar keeps only the project controls and shows no messages.
+- Done when: every message the app shows appears in the bottom bar and nowhere else, after the mode's instruction and before the coordinates (tested on the status text for each mode), and no text box in the top bar is narrower than four times its T-204 width.
+
+**T-204c Pick highlighting.** Spec 6.2; Q-81. Depends on T-204b.
+
+- Build: in Dimension mode, the reference the next click would pick (a wall face, a wall center or a datum, chosen exactly as `pick` chooses it) is highlighted under the pointer, and the first picked reference stays highlighted in another color until the dimension is proposed or cancelled. The status line names both.
+- Done when: the highlighted reference is always the one a click at that point picks (proptest over the shop fixture and the T-203 room, any zoom and pointer position), and the first pick's highlight clears on Propose, Cancel and Esc.
+
+**T-204d Dimensions on the plan.** Spec 5.3, 6.2, 7.1, 7.5, 8.2; Q-81 (b), (c). Depends on T-204c.
+
+- Build: every Distance constraint is drawn on the plan as an architectural dimension: extension lines from its two references, a dimension line along its axis, and its value in feet-inches (with ~ when off the grid, 5.3). Placement is computed by the app from the document alone and stored nowhere: outside the plan's bounding box on the side nearer its references, stacked outward in rows ordered by value then label. Driving and Reference constraints are styled differently, and the constraints of a proposal's conflicts are drawn red. A click selects a dimension; Delete proposes RemoveConstraint for it, which goes through the review panel (T-204).
+- Done when: the T-203 room shows its four dimensions with the values typed; the same document always gives the same layout (tested); selecting one and pressing Delete opens a review whose echo names the constraint, and Confirm removes it and leaves its wall underconstrained (orange).
+
+**T-205 Underlay.** Spec 6.6. Depends on T-202 and T-204d.
 
 - Build: import a PNG or JPEG; two-point calibration against a known distance; a second known distance reports the residual; transcribed dimensions are entered as Measured constraints with provenance Transcribed.
 - Done when: the residual is displayed, and an underlay never changes geometry (tested).
@@ -414,7 +429,7 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: a baseline snapshot; function tags; the ExistingConditionEdit flag on proposals; a diff view showing all three states.
 - Done when: editing an existing wall flags the proposal and shows the original value. Then gate G-5.
 
-**T-208 Usability pass.** Depends on T-202b, T-203 to T-207 and gate G-5.
+**T-208 Usability pass.** Depends on T-202b, T-203 to T-207, T-204b to T-204d and gate G-5.
 
 - Build: fix the top issues found at G-5 and add a first-run walkthrough.
 - Done when: a non-expert completes the shop slice without help, confirmed by you.
