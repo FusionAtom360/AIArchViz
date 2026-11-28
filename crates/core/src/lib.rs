@@ -42,7 +42,7 @@ pub use clearance::{ClearanceError, ClearanceRequest, clearance_resolve, wall_no
 pub use command::{
     Action, Command, CommandError, CreateNode, CreateOpening, DimensionTarget, Motion,
     MoveOccurrence, MoveOpening, MoveWall, NoArgs, SetConstraintValue, SetProjectUnits, SetStorey,
-    SetVariantSelection, apply,
+    SetVariantSelection, SetWallLayers, apply,
 };
 pub use create::{
     AddConstraint, CreateCeiling, CreateDatum, CreateElementType, CreateMaterial, CreateRoof,
@@ -54,6 +54,7 @@ pub use defaults::{
     ROOF_THICKNESS, SLAB_THICKNESS, WALL_BASE_OFFSET, interior_wall, opening_size, proposed,
 };
 pub use document::*;
+pub use echo::describe_constraint;
 pub use edit::{Candidate, Case, MoveError, MoveOutcome};
 pub use geometry::{
     GeometryError, OpeningProblem, OpeningViolation, Void, WallGeometry, WallProfile, node_joins,

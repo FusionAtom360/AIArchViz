@@ -2,7 +2,8 @@
 //! 64-bit viewport, pans (middle or right drag), zooms about the pointer
 //! (scroll), selects (click) and drags entities into move commands (left
 //! drag), and in wall mode draws runs of walls from snapped clicks
-//! (T-202b, draw.rs). Floats appear only between the viewport and the painter; every
+//! (T-202b, draw.rs), and in dimension mode picks references for a
+//! dimension (T-203, dimension.rs). Floats appear only between the viewport and the painter; every
 //! value that leaves this widget as a command argument is snapped first.
 
 use archviz_core::{Axis, DatumGeometry, Function, Length, format_length};
@@ -10,6 +11,11 @@ use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Pos2, Sense, Shape, Stroke, StrokeKind,
 };
 
+use std::collections::BTreeSet;
+
+use archviz_core::Uuid;
+
+use crate::dimension::{DimensionTool, Pick, pick};
 use crate::drag::{Drag, Preview};
 use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
@@ -32,6 +38,8 @@ pub enum Event {
     Run(Run),
     /// A click in wall mode was refused, and why.
     Refused(&'static str),
+    /// A click in dimension mode picked a reference, or was refused.
+    Picked(Pick),
 }
 
 pub struct PlanView {
@@ -45,6 +53,12 @@ pub struct PlanView {
     pub walls: Option<WallTool>,
     /// In wall mode, where a click would place the next point.
     next: Option<World>,
+    /// Dimension mode: the references being picked. None otherwise.
+    pub dimensions: Option<DimensionTool>,
+    /// Walls the solver reports underconstrained (7.3).
+    pub free: BTreeSet<Uuid>,
+    /// Walls named by a pending proposal's conflicts (7.5).
+    pub conflicting: BTreeSet<Uuid>,
 }
 
 fn pos(s: Screen) -> Pos2 {
@@ -72,6 +86,9 @@ impl PlanView {
             pointer: None,
             walls: None,
             next: None,
+            dimensions: None,
+            free: BTreeSet::new(),
+            conflicting: BTreeSet::new(),
         }
     }
 
@@ -113,6 +130,15 @@ impl PlanView {
             s.push_str(
                 "   click the first point to close, Enter or double-click to finish, Esc to cancel",
             );
+        }
+        if let Some(tool) = &self.dimensions {
+            s.push_str(&match tool.first() {
+                None => "   pick the first reference (wall face, wall center or datum)".to_string(),
+                Some(p) => format!(
+                    "   from {}: pick the second reference, Esc to cancel",
+                    p.name
+                ),
+            });
         }
         if let Some(v) = &self.viewport {
             s.push_str(&format!(
@@ -193,6 +219,19 @@ impl PlanView {
             self.next = self
                 .pointer
                 .map(|p| tool.next_point(scene, p, tolerance, step));
+        } else if let Some(tool) = &mut self.dimensions {
+            // Dimension mode: clicks pick references.
+            self.next = None;
+            self.drag = None;
+            self.preview = None;
+            if response.clicked_by(PointerButton::Primary)
+                && let Some(at) = at
+            {
+                event = Event::Picked(tool.click(pick(scene, at, viewport.nm(SNAP_PX))));
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                tool.cancel();
+            }
         } else {
             self.next = None;
             event = self.select_and_drag(ui, &response, scene, &viewport, at);
@@ -338,7 +377,15 @@ impl PlanView {
                 Function::Demolished => Color32::from_rgb(200, 80, 80),
                 _ => ink,
             };
-            outline(&w.footprint, stroke(Entity::Wall(w.id), color), None);
+            // A conflict outranks underconstrained, which outranks selection.
+            let s = if self.conflicting.contains(&w.id) {
+                Stroke::new(3.0, Color32::from_rgb(230, 40, 40))
+            } else if self.free.contains(&w.id) {
+                Stroke::new(2.0, Color32::from_rgb(240, 150, 0))
+            } else {
+                stroke(Entity::Wall(w.id), color)
+            };
+            outline(&w.footprint, s, None);
         }
         for o in &scene.openings {
             outline(

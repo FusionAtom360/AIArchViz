@@ -78,6 +78,16 @@ pub(crate) fn move_entry(current: &Document, command: &Command, outcome: &MoveOu
     }
 }
 
+/// A constraint of `doc`, or one proposed on it, in the echo's words:
+/// `the distance from W-001 left face to W-003 right face along X` (Q-76).
+pub fn describe_constraint(doc: &Document, kind: &ConstraintKind) -> String {
+    Names {
+        before: doc,
+        after: doc,
+    }
+    .constraint(kind, 0)
+}
+
 /// The echo of an undo or redo of commit `sequence`.
 pub(crate) fn undo_redo(verb: &str, sequence: Option<u64>) -> String {
     match sequence {
@@ -1506,6 +1516,22 @@ pub(crate) mod tests {
             after: &doc,
         };
         assert!(n.entity(looped, 0).contains("another entity"));
+    }
+
+    /// The app names a constraint, committed or only proposed, in the echo's
+    /// words (T-203).
+    #[test]
+    fn a_constraint_is_described_as_the_echo_names_it() {
+        let (doc, _, [c1, _, _], _) = labeled_chain();
+        let kind = doc
+            .constraints
+            .get(&c1)
+            .map(|c| c.kind.clone())
+            .unwrap_or_else(|| unreachable!());
+        assert_eq!(
+            describe_constraint(&doc, &kind),
+            r#"the distance from datum "West" to W-001 center along X"#
+        );
     }
 
     /// Off-grid lengths keep their leading ~ (CLAUDE.md).

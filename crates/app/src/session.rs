@@ -178,6 +178,17 @@ impl Session {
         }
     }
 
+    /// The solver's report on the committed document (`solve`): positions,
+    /// conflicts and underconstrained classes (7.3).
+    pub fn solve(&self) -> Result<serde_json::Value, String> {
+        self.request("solve", &serde_json::json!({}))
+    }
+
+    /// The parameters still to supply or confirm (`required-parameters`, 7.4).
+    pub fn required_parameters(&self) -> Result<serde_json::Value, String> {
+        self.request("required-parameters", &serde_json::json!({}))
+    }
+
     /// Proposes `action` as one command (see `propose_commands`).
     pub fn propose(&self, action: Action) -> Result<Pending, String> {
         let (id, idempotency_key) = self.ids();
@@ -549,5 +560,283 @@ mod draw_tests {
         assert_eq!(session.commit(&first), Ok(1));
         assert!(session.commit(&second).is_err(), "proposed at version 0");
         assert_eq!(session.version(), 1);
+    }
+}
+
+#[cfg(test)]
+mod dimension_tests {
+    use super::{Pending, Session};
+    use crate::dimension::{
+        DimensionTool, Pick, conflicts, distance_action, parse_value, pick, underconstrained_walls,
+    };
+    use crate::draw::tests::empty_project;
+    use crate::draw::{Run, run_commands, setup_actions, storey_for};
+    use crate::interview::{set_layers, total, wall_groups, with_total};
+    use crate::scene::{Scene, WallShape};
+    use archviz_core::{
+        Action, Axis, Command, Direction, Document, Length, Reference, Source, WallSide,
+        format_length, reference_coordinate,
+    };
+    use std::collections::BTreeSet;
+
+    const FT: i64 = 304_800_000;
+    const IN: i64 = 25_400_000;
+
+    fn commands(session: &Session, actions: Vec<Action>) -> Vec<Command> {
+        actions
+            .into_iter()
+            .map(|action| {
+                let (id, idempotency_key) = session.ids();
+                Command {
+                    id,
+                    idempotency_key,
+                    action,
+                }
+            })
+            .collect()
+    }
+
+    fn confirm(session: &Session, pending: &Pending) -> u64 {
+        session.commit(pending).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    fn wall(scene: &Scene, direction: Direction) -> WallShape {
+        scene
+            .walls
+            .iter()
+            .find(|w| w.direction == direction)
+            .cloned()
+            .unwrap_or_else(|| panic!("a {direction:?} wall"))
+    }
+
+    /// A point 1/32 in inside a wall's right (outer) face, halfway along it.
+    fn on_right_face(w: &WallShape) -> (i64, i64) {
+        let inward = if w.right < w.left { IN / 32 } else { -IN / 32 };
+        let mid = |axis: Axis| {
+            let v = w.footprint.iter().map(|p| match axis {
+                Axis::X => p.0,
+                Axis::Y => p.1,
+            });
+            (v.clone().min().unwrap_or(0) + v.max().unwrap_or(0)) / 2
+        };
+        match w.across {
+            Axis::X => (w.right + inward, mid(Axis::Y)),
+            Axis::Y => (mid(Axis::X), w.right + inward),
+        }
+    }
+
+    fn face(doc: &Document, wall: &WallShape) -> String {
+        let r = Reference::WallFace {
+            wall: wall.id,
+            side: WallSide::Right,
+            boundary: 0,
+        };
+        format_length(reference_coordinate(doc, &r, wall.across).unwrap_or_else(|e| panic!("{e}")))
+    }
+
+    /// Picks two points in the plan, types `text`, checks the parser echo
+    /// and proposes the dimension, as the dimension box does.
+    fn dimension(
+        session: &Session,
+        a: (i64, i64),
+        b: (i64, i64),
+        text: &str,
+        echo: &str,
+    ) -> Pending {
+        let doc = session.document();
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        // 1 px = 1/4 in; the pick tolerance is 8 px.
+        let tolerance = 2 * IN;
+        let mut tool = DimensionTool::default();
+        assert_eq!(
+            tool.click(pick(&scene, a, tolerance)),
+            Pick::First,
+            "first pick at {a:?}"
+        );
+        let Pick::Ready(pair) = tool.click(pick(&scene, b, tolerance)) else {
+            panic!("second pick at {b:?}")
+        };
+        let value = parse_value(text, doc.project.default_unit).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(format_length(value), echo, "parser echo");
+        let action = distance_action(&doc, &pair, value).unwrap_or_else(|e| panic!("{e}"));
+        session
+            .propose(action)
+            .unwrap_or_else(|e| panic!("{text}: {e}"))
+    }
+
+    /// Done when: a user can build a rectangular room from four typed
+    /// dimensions and a wall thickness, and a conflict names both
+    /// constraints. Each step is what the app does on that input.
+    #[test]
+    fn a_rectangular_room_from_four_typed_dimensions_and_a_wall_thickness() {
+        let (dir, _) = empty_project("dimension-room");
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+
+        // The storey and origin datum, then four drawn walls at placeholder
+        // positions (T-202b), each confirmed.
+        let setup = commands(&session, setup_actions(&session.document()));
+        let pending = session
+            .propose_commands(setup)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(confirm(&session, &pending), 1);
+        let storey = storey_for(&session.document()).unwrap_or_else(|| panic!("a storey"));
+        let run = Run {
+            points: vec![(0, 0), (10 * FT, 0), (10 * FT, 10 * FT), (0, 10 * FT)],
+            closed: true,
+        };
+        let walls = run_commands(&run, storey, || session.ids()).unwrap_or_else(|| panic!());
+        let pending = session
+            .propose_commands(walls)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(confirm(&session, &pending), 2);
+
+        // Nothing dimensions the walls yet: all four are underconstrained.
+        let doc = session.document();
+        let solved = session.solve().unwrap_or_else(|e| panic!("{e}"));
+        let all: BTreeSet<_> = doc.walls.keys().copied().collect();
+        assert_eq!(underconstrained_walls(&doc, &solved), all);
+
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let south = wall(&scene, Direction::PosX);
+        let east = wall(&scene, Direction::PosY);
+        let north = wall(&scene, Direction::NegX);
+        let west = wall(&scene, Direction::NegY);
+        // Four typed dimensions: the datum to the west and south outer
+        // faces, then the width and the depth between outer faces. Each
+        // pick is read off the plan as it is after the previous commit;
+        // None is the origin datum.
+        let typed = [
+            (None, Direction::NegY, "0\"", "0'-0\""),
+            (None, Direction::PosX, "0 in", "0'-0\""),
+            (
+                Some(Direction::NegY),
+                Direction::PosY,
+                "14' 6 1/2\"",
+                "14'-6 1/2\"",
+            ),
+            (Some(Direction::PosX), Direction::NegX, "135in", "11'-3\""),
+        ];
+        let mut version = 2;
+        for (from, to, text, echo) in typed {
+            let now = Scene::build(&session.document()).unwrap_or_else(|e| panic!("{e}"));
+            let a = from.map_or((3, -2), |d| on_right_face(&wall(&now, d)));
+            let b = on_right_face(&wall(&now, to));
+            let pending = dimension(&session, a, b, text, echo);
+            let line = pending.echo().join(" ");
+            assert!(line.contains(echo), "proposal echo {line:?} shows {echo}");
+            assert_eq!(session.version(), version, "nothing commits unconfirmed");
+            version += 1;
+            assert_eq!(confirm(&session, &pending), version);
+        }
+        let doc = session.document();
+        let solved = session.solve().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(underconstrained_walls(&doc, &solved), BTreeSet::new());
+
+        // The interview panel groups the four catalog walls; a typed 6"
+        // total sets the stud to 5" for every wall in the group.
+        let groups = wall_groups(&doc);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        let group = &groups[0];
+        assert_eq!(group.walls.len(), 4);
+        assert_eq!(
+            total(&group.layers).map(format_length),
+            Ok("0'-4 1/2\"".to_string())
+        );
+        let six = parse_value("6\"", doc.project.default_unit).unwrap_or_else(|e| panic!("{e}"));
+        let layers = with_total(&group.layers, six).unwrap_or_else(|e| panic!("{e}"));
+        let actions = set_layers(group, &layers).unwrap_or_else(|e| panic!("{e}"));
+        let pending = session
+            .propose_commands(commands(&session, actions))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pending.echo().len(), 4, "{:?}", pending.echo());
+        version += 1;
+        assert_eq!(confirm(&session, &pending), version);
+
+        // The room: outer faces where the dimensions put them, 6" walls,
+        // nothing free and nothing in conflict.
+        let doc = session.document();
+        let solved = session.solve().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(underconstrained_walls(&doc, &solved), BTreeSet::new());
+        assert_eq!(solved["conflicts"], serde_json::json!([]));
+        assert_eq!(face(&doc, &west), "0'-0\"");
+        assert_eq!(face(&doc, &south), "0'-0\"");
+        assert_eq!(face(&doc, &east), "14'-6 1/2\"");
+        assert_eq!(face(&doc, &north), "11'-3\"");
+        for w in doc.walls.values() {
+            let set = doc
+                .layer_sets
+                .get(&w.layer_set)
+                .unwrap_or_else(|| panic!("layer set"));
+            let sum: i64 = set
+                .layers
+                .iter()
+                .map(|l| l.thickness.value.nanometers())
+                .sum();
+            assert_eq!(sum, 6 * IN);
+            let core = set
+                .layers
+                .iter()
+                .find(|l| l.core)
+                .unwrap_or_else(|| panic!());
+            assert_eq!(core.thickness.value, Length::from_nanometers(5 * IN));
+            assert_eq!(core.thickness.source, Source::UserStated);
+            // The reference line stays on the core center.
+            assert_eq!(w.left_extent.value, Length::from_nanometers(3 * IN));
+            assert_eq!(w.left_extent.source, Source::Derived);
+        }
+        let mut corners: Vec<(String, String)> = doc
+            .nodes
+            .values()
+            .map(|n| (format_length(n.x), format_length(n.y)))
+            .collect();
+        corners.sort();
+        assert_eq!(
+            corners,
+            [
+                ("0'-3\"".to_string(), "0'-3\"".to_string()),
+                ("0'-3\"".to_string(), "11'-0\"".to_string()),
+                ("14'-3 1/2\"".to_string(), "0'-3\"".to_string()),
+                ("14'-3 1/2\"".to_string(), "11'-0\"".to_string()),
+            ]
+        );
+        // The interview no longer asks for the core or the left extent.
+        let rows = session
+            .required_parameters()
+            .unwrap_or_else(|e| panic!("{e}"));
+        for row in rows["parameters"].as_array().into_iter().flatten() {
+            let field = row["field"].as_str().unwrap_or_default();
+            assert_ne!(field, "/left_extent", "{row}");
+            assert_ne!(field, "/layers/1/thickness", "{row}");
+        }
+
+        // A fifth dimension that disagrees: a conflict naming both, which
+        // cannot be committed.
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let west = wall(&scene, Direction::NegY);
+        let east = wall(&scene, Direction::PosY);
+        let pending = dimension(
+            &session,
+            on_right_face(&west),
+            on_right_face(&east),
+            "15'",
+            "15'-0\"",
+        );
+        let report = conflicts(&doc, &pending);
+        let named = format!(
+            "the distance from {} right face to {} right face along X",
+            west.label, east.label
+        );
+        assert_eq!(
+            report.lines,
+            [format!(
+                "{named} (15'-0\") conflicts with {named} (14'-6 1/2\")"
+            )]
+        );
+        assert_eq!(report.walls, BTreeSet::from([west.id, east.id]));
+        assert!(
+            session.commit(&pending).is_err(),
+            "a conflict blocks commit"
+        );
+        assert_eq!(session.version(), version);
     }
 }

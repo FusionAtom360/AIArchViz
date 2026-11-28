@@ -14,17 +14,29 @@
 //! T-202b adds the wall tool (draw.rs). Each drawn run, and on first use the
 //! storey and origin datum, is proposed through the command API, its echo
 //! shown, and committed only when the user confirms it (DEC-10).
+//!
+//! T-203 adds dimensions (dimension.rs): pick two references, type a value,
+//! check its parser echo, then confirm the proposal echo to commit a
+//! Distance constraint. The plan highlights underconstrained walls and the
+//! walls of a proposal's conflicts, whose constraints are named. The
+//! interview panel (interview.rs) lists required parameters and sets wall
+//! thicknesses by group (Q-78 (i), (x)).
 
+mod dimension;
 mod drag;
 mod draw;
+mod interview;
 mod plan_view;
 mod scene;
 mod session;
 mod snap;
 mod viewport;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
+
+use archviz_core::{Action, Axis, Length, ProjectUnit, Source, Uuid, format_length};
 
 use eframe::egui;
 use plan_view::{Event, PlanView};
@@ -74,6 +86,45 @@ struct App {
     proposal: Vec<String>,
     /// A proposal waiting for the user to confirm its echo, and what it is.
     pending: Option<(String, Pending)>,
+    /// The pending proposal's conflicts, named (7.5).
+    conflicts: dimension::ConflictReport,
+    /// Two picked references and the value being typed for them.
+    dimension: Option<(dimension::Pair, String)>,
+    /// Required parameters and underconstrained walls, and the version they
+    /// were read at.
+    checked: Option<(u64, serde_json::Value, BTreeSet<Uuid>)>,
+    /// Text typed in the interview panel, by row key.
+    typed: BTreeMap<String, String>,
+}
+
+const WARN: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
+
+/// A text box for a length, its parser echo (5.2) and a button; the parsed
+/// value when the button is clicked.
+fn length_input(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    unit: ProjectUnit,
+    button: &str,
+) -> Option<Length> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(text).desired_width(90.0));
+        let parsed = dimension::parse_value(text, unit);
+        if !text.trim().is_empty() {
+            match &parsed {
+                Ok(v) => ui.label(format!("reads as {}", format_length(*v))),
+                Err(e) => ui.colored_label(WARN, e),
+            };
+        }
+        if ui
+            .add_enabled(parsed.is_ok(), egui::Button::new(button))
+            .clicked()
+        {
+            out = parsed.ok();
+        }
+    });
+    out
 }
 
 impl App {
@@ -90,6 +141,10 @@ impl App {
             plan: PlanView::new(),
             proposal: Vec::new(),
             pending: None,
+            conflicts: dimension::ConflictReport::default(),
+            dimension: None,
+            checked: None,
+            typed: BTreeMap::new(),
         }
     }
 
@@ -100,6 +155,26 @@ impl App {
         self.plan = PlanView::new();
         self.proposal.clear();
         self.pending = None;
+        self.conflicts = dimension::ConflictReport::default();
+        self.dimension = None;
+        self.checked = None;
+        self.typed.clear();
+    }
+
+    /// Holds `pending` for confirmation and highlights its conflicts.
+    fn hold(&mut self, what: &str, pending: Pending) {
+        if let Some(session) = &self.session {
+            self.conflicts = dimension::conflicts(&session.document(), &pending);
+        }
+        self.plan.conflicting = self.conflicts.walls.clone();
+        self.pending = Some((what.to_string(), pending));
+    }
+
+    /// Drops the pending proposal and its highlights.
+    fn release(&mut self) {
+        self.pending = None;
+        self.conflicts = dimension::ConflictReport::default();
+        self.plan.conflicting.clear();
     }
 
     /// Proposes `commands`; on success it waits for confirmation.
@@ -108,7 +183,7 @@ impl App {
             return;
         };
         match session.propose_commands(commands) {
-            Ok(pending) => self.pending = Some((what.to_string(), pending)),
+            Ok(pending) => self.hold(what, pending),
             Err(e) => self.message = format!("{what}: {e}"),
         }
     }
@@ -119,6 +194,7 @@ impl App {
         if self.plan.walls.take().is_some() {
             return;
         }
+        self.plan.dimensions = None;
         self.plan.walls = Some(draw::WallTool::new());
         let Some(session) = &self.session else {
             return;
@@ -139,6 +215,159 @@ impl App {
             })
             .collect();
         self.propose("Storey and origin datum", commands);
+    }
+
+    /// Turns dimension mode on or off.
+    fn toggle_dimensions(&mut self) {
+        if self.plan.dimensions.take().is_some() {
+            return;
+        }
+        self.plan.walls = None;
+        self.plan.dimensions = Some(dimension::DimensionTool::default());
+    }
+
+    /// Proposes `actions`, one command each, as one transaction.
+    fn propose_actions(&mut self, what: &str, actions: Vec<Action>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let commands = actions
+            .into_iter()
+            .map(|action| {
+                let (id, idempotency_key) = session.ids();
+                archviz_core::Command {
+                    id,
+                    idempotency_key,
+                    action,
+                }
+            })
+            .collect();
+        self.propose(what, commands);
+    }
+
+    /// The dimension box: the two references, the typed value with its
+    /// parser echo (5.2), and Propose once the value parses.
+    fn dimension_box(&mut self, ui: &mut egui::Ui) {
+        let (Some(session), Some((pair, text))) = (&self.session, &mut self.dimension) else {
+            return;
+        };
+        ui.separator();
+        let axis = match pair.axis {
+            Axis::X => "X",
+            Axis::Y => "Y",
+        };
+        ui.strong(format!(
+            "Dimension from {} to {} along {axis}",
+            pair.a.name, pair.b.name
+        ));
+        let doc = session.document();
+        let value = length_input(ui, text, doc.project.default_unit, "Propose");
+        let cancel = ui.button("Cancel").clicked();
+        let action = value.map(|v| (v, dimension::distance_action(&doc, pair, v)));
+        if cancel {
+            self.dimension = None;
+        }
+        match action {
+            Some((v, Ok(action))) => {
+                self.dimension = None;
+                self.propose_actions(&format!("Dimension {}", format_length(v)), vec![action]);
+            }
+            Some((_, Err(e))) => self.message = format!("Dimension: {e}"),
+            None => {}
+        }
+    }
+
+    /// The interview panel (7.4): each group of walls with the same layers,
+    /// its total and each layer, then every required parameter with its
+    /// proposed default. Underconstrained walls are counted and drawn orange.
+    fn interview(&mut self, ui: &mut egui::Ui) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let version = session.version();
+        if self.checked.as_ref().is_none_or(|(v, _, _)| *v != version) {
+            let doc = session.document();
+            let params = session.required_parameters().unwrap_or_default();
+            let free = session
+                .solve()
+                .map(|s| dimension::underconstrained_walls(&doc, &s))
+                .unwrap_or_default();
+            self.checked = Some((version, params, free));
+        }
+        let Some((_, params, free)) = &self.checked else {
+            return;
+        };
+        self.plan.free = free.clone();
+        let rows = interview::rows(params);
+        let free = free.len();
+        let doc = session.document();
+        let unit = doc.project.default_unit;
+        let mut set: Option<(String, Result<Vec<Action>, String>)> = None;
+        ui.separator();
+        egui::CollapsingHeader::new(format!("Required parameters ({})", rows.len()))
+            .default_open(true)
+            .show(ui, |ui| {
+                if free > 0 {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(240, 150, 0),
+                        format!("{free} walls are underconstrained (orange): dimension them."),
+                    );
+                }
+                for group in interview::wall_groups(&doc) {
+                    let names: Vec<&str> = group.walls.iter().map(|(_, l)| l.as_str()).collect();
+                    let names = names.join(", ");
+                    let first = group.walls.first().map_or("", |w| w.1.as_str());
+                    let total = interview::total(&group.layers)
+                        .map(format_length)
+                        .unwrap_or_default();
+                    let mark = if interview::proposed(&group.layers) {
+                        " (Proposed)"
+                    } else {
+                        ""
+                    };
+                    ui.strong(format!("Walls {names}: {total} thick{mark}"));
+                    ui.label("Total thickness (sets the core layer)");
+                    let text = self.typed.entry(format!("{first}/total")).or_default();
+                    if let Some(v) = length_input(ui, text, unit, "Set") {
+                        let result = interview::with_total(&group.layers, v)
+                            .and_then(|layers| interview::set_layers(&group, &layers));
+                        set = Some((format!("Thickness of {names}"), result));
+                    }
+                    for (i, layer) in group.layers.iter().enumerate() {
+                        let core = if layer.core { ", core" } else { "" };
+                        let source = if layer.thickness.source == Source::Proposed {
+                            " (Proposed)"
+                        } else {
+                            ""
+                        };
+                        ui.label(format!(
+                            "Layer {}{core}: {}{source}",
+                            i + 1,
+                            format_length(layer.thickness.value)
+                        ));
+                        let text = self.typed.entry(format!("{first}/{i}")).or_default();
+                        if let Some(v) = length_input(ui, text, unit, "Set") {
+                            let result = interview::with_layer(&group.layers, i, v)
+                                .and_then(|layers| interview::set_layers(&group, &layers));
+                            set = Some((format!("Layer {} of {names}", i + 1), result));
+                        }
+                    }
+                }
+                ui.separator();
+                egui::Grid::new("required").striped(true).show(ui, |ui| {
+                    for (what, field, default) in &rows {
+                        ui.label(what);
+                        ui.label(field);
+                        ui.label(default);
+                        ui.end_row();
+                    }
+                });
+            });
+        match set {
+            Some((what, Ok(actions))) => self.propose_actions(&what, actions),
+            Some((what, Err(e))) => self.message = format!("{what}: {e}"),
+            None => {}
+        }
     }
 
     /// Proposes a drawn run of walls.
@@ -166,6 +395,9 @@ impl App {
         for line in pending.echo() {
             ui.label(line);
         }
+        for line in &self.conflicts.lines {
+            ui.colored_label(WARN, format!("Conflict: {line}"));
+        }
         let mut done = None;
         ui.horizontal(|ui| {
             if ui.button("Confirm").clicked() {
@@ -181,11 +413,11 @@ impl App {
                     Ok(version) => format!("{what}: committed as version {version}."),
                     Err(e) => format!("{what}: not committed: {e}"),
                 };
-                self.pending = None;
+                self.release();
             }
             (Some(_), _) => {
                 self.message = format!("{what}: discarded.");
-                self.pending = None;
+                self.release();
             }
             (None, _) => {}
         }
@@ -295,7 +527,9 @@ impl App {
             "Selection: {}",
             describe(&self.scene, self.plan.selected)
         ));
+        self.dimension_box(ui);
         self.confirm(ui);
+        self.interview(ui);
         if !self.proposal.is_empty() {
             ui.separator();
             ui.label("Last drag, proposed and not committed (review is T-204):");
@@ -332,6 +566,13 @@ impl App {
             }
             Event::Run(run) => self.propose_run(&run),
             Event::Refused(why) => self.message = format!("Point not placed: {why}."),
+            Event::Picked(dimension::Pick::First) => {}
+            Event::Picked(dimension::Pick::Ready(pair)) => {
+                self.dimension = Some((pair, String::new()));
+            }
+            Event::Picked(dimension::Pick::Refused(why)) => {
+                self.message = format!("Not picked: {why}.");
+            }
         }
     }
 }
@@ -379,6 +620,16 @@ impl eframe::App for App {
                     .clicked()
                 {
                     self.toggle_walls();
+                }
+                let dimensioning = self.plan.dimensions.is_some();
+                if ui
+                    .add_enabled(
+                        self.session.is_some(),
+                        egui::Button::selectable(dimensioning, "Dimension"),
+                    )
+                    .clicked()
+                {
+                    self.toggle_dimensions();
                 }
                 ui.label(self.plan.status());
             });

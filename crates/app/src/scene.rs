@@ -63,6 +63,7 @@ pub struct SlabShape {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatumShape {
+    pub id: Uuid,
     pub name: String,
     pub geometry: DatumGeometry,
 }
@@ -193,8 +194,9 @@ impl Scene {
         }
         scene.datums = doc
             .datums
-            .values()
-            .map(|d| DatumShape {
+            .iter()
+            .map(|(id, d)| DatumShape {
+                id: *id,
                 name: d.name.clone(),
                 geometry: d.geometry,
             })
@@ -239,17 +241,20 @@ impl Scene {
         if let Some(o) = self.openings.iter().find(|o| in_rect(&o.rect)) {
             return Some(Entity::Opening(o.id));
         }
-        if let Some(w) = self
-            .walls
-            .iter()
-            .find(|w| inside(&w.footprint, p) || near_outline(&w.footprint, p, tolerance))
-        {
+        if let Some(w) = self.wall_at(p, tolerance) {
             return Some(Entity::Wall(w.id));
         }
         self.slabs
             .iter()
             .find(|s| inside(&s.outline, p) || near_outline(&s.outline, p, tolerance))
             .map(|s| Entity::Slab(s.id))
+    }
+
+    /// The wall whose footprint holds `p` or lies within `tolerance` of it.
+    pub fn wall_at(&self, p: World, tolerance: i64) -> Option<&WallShape> {
+        self.walls
+            .iter()
+            .find(|w| inside(&w.footprint, p) || near_outline(&w.footprint, p, tolerance))
     }
 
     /// Snap references on `axis`, (coordinate, description), leaving out
