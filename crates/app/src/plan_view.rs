@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use archviz_core::Uuid;
 
-use crate::dimension::{DimensionTool, Pick, pick};
+use crate::dimension::{DimensionTool, Mark, Pick, Picked, mark, pick};
 use crate::drag::{Drag, Preview};
 use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
@@ -28,6 +28,9 @@ const SNAP_PX: f64 = 8.0;
 /// Pixels outside the canvas that clipped shapes extend to, so clip edges
 /// never show.
 const PAD: f64 = 64.0;
+/// Dimension mode: the reference a click would pick, and the first pick.
+pub const HOVER: Color32 = Color32::from_rgb(0, 140, 255);
+pub const PICKED: Color32 = Color32::from_rgb(0, 190, 160);
 
 /// What the widget reports to the app after a frame.
 pub enum Event {
@@ -55,6 +58,12 @@ pub struct PlanView {
     next: Option<World>,
     /// Dimension mode: the references being picked. None otherwise.
     pub dimensions: Option<DimensionTool>,
+    /// Dimension mode: the reference under the pointer, the one a click
+    /// there picks (T-204c).
+    hover: Option<Picked>,
+    /// The first reference of a pair whose value is being typed; the app
+    /// holds the pair and sets this each frame.
+    pub held: Option<Picked>,
     /// Walls the solver reports underconstrained (7.3).
     pub free: BTreeSet<Uuid>,
     /// Walls named by a pending proposal's conflicts (7.5).
@@ -87,6 +96,8 @@ impl PlanView {
             walls: None,
             next: None,
             dimensions: None,
+            hover: None,
+            held: None,
             free: BTreeSet::new(),
             conflicting: BTreeSet::new(),
         }
@@ -105,7 +116,7 @@ impl PlanView {
                 .to_string();
         }
         if let Some(tool) = &self.dimensions {
-            return match tool.first() {
+            let mut s = match tool.first() {
                 None => "Dimension: pick the first reference (wall face, wall center or datum)"
                     .to_string(),
                 Some(p) => format!(
@@ -113,10 +124,23 @@ impl PlanView {
                     p.name
                 ),
             };
+            if let Some(h) = &self.hover {
+                s.push_str(&format!("; under the pointer: {}", h.name));
+            }
+            return s;
         }
         "Select: click to select, drag a wall, opening or item to move it; \
          scroll to zoom, right or middle drag to pan"
             .to_string()
+    }
+
+    /// The first pick, highlighted until the dimension is proposed or
+    /// cancelled: the tool's while the second is picked, else the held one.
+    pub fn first_pick(&self) -> Option<&Picked> {
+        self.dimensions
+            .as_ref()
+            .and_then(DimensionTool::first)
+            .or(self.held.as_ref())
     }
 
     /// The pointer readout; last in the status line.
@@ -198,6 +222,9 @@ impl PlanView {
         let at = response
             .interact_pointer_pos()
             .map(|p| viewport.to_world(screen(p)));
+        if self.dimensions.is_none() {
+            self.hover = None;
+        }
         if let Some(tool) = &mut self.walls {
             // Wall mode: clicks place points; nothing is selected or dragged.
             self.drag = None;
@@ -231,14 +258,17 @@ impl PlanView {
                 .pointer
                 .map(|p| tool.next_point(scene, p, tolerance, step));
         } else if let Some(tool) = &mut self.dimensions {
-            // Dimension mode: clicks pick references.
+            // Dimension mode: clicks pick references; the one a click at
+            // the pointer would pick is highlighted, found the same way.
             self.next = None;
             self.drag = None;
             self.preview = None;
+            let under = |p: World| pick(scene, p, viewport.nm(SNAP_PX));
+            self.hover = self.pointer.and_then(under);
             if response.clicked_by(PointerButton::Primary)
                 && let Some(at) = at
             {
-                event = Event::Picked(tool.click(pick(scene, at, viewport.nm(SNAP_PX))));
+                event = Event::Picked(tool.click(under(at)));
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 tool.cancel();
@@ -533,6 +563,312 @@ impl PlanView {
                 }
             }
         }
+        // Dimension mode: the reference under the pointer, then the first
+        // pick over it.
+        let highlight = |picked: &Picked, color: Color32| {
+            let stroke = Stroke::new(3.0, color);
+            let line = |p: Screen, q: Screen| {
+                if let Some((p, q)) = clip_segment(p, q, lo, hi) {
+                    painter.line_segment([pos(p), pos(q)], stroke);
+                }
+            };
+            match mark(scene, picked) {
+                Some(Mark::Segment(a, b)) => line(v.to_screen(a), v.to_screen(b)),
+                Some(Mark::XLine(x)) => {
+                    let x = v.to_screen((x, 0)).x;
+                    line(Screen { x, y: lo.y }, Screen { x, y: hi.y });
+                }
+                Some(Mark::YLine(y)) => {
+                    let y = v.to_screen((0, y)).y;
+                    line(Screen { x: lo.x, y }, Screen { x: hi.x, y });
+                }
+                Some(Mark::Point(p)) => {
+                    let s = v.to_screen(p);
+                    if clip_segment(s, s, lo, hi).is_some() {
+                        painter.circle_stroke(pos(s), 7.0, stroke);
+                    }
+                }
+                None => {}
+            }
+        };
+        if let Some(h) = &self.hover {
+            highlight(h, HOVER);
+        }
+        if let Some(f) = self.first_pick() {
+            highlight(f, PICKED);
+        }
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, faint), StrokeKind::Inside);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::viewport::{MAX_SCALE, MIN_SCALE};
+    use eframe::egui::{Context, RawInput, Rect, epaint::ClippedShape, vec2};
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+
+    /// The shop fixture and the T-203 room, built once.
+    fn scenes() -> &'static [Scene; 2] {
+        static SCENES: OnceLock<[Scene; 2]> = OnceLock::new();
+        SCENES.get_or_init(|| {
+            let (_, shop) = crate::scene::tests::shop("highlight");
+            let (_, room) = crate::session::dimension_tests::t203_room("highlight-room");
+            let build = |d| Scene::build(d).unwrap_or_else(|e| panic!("{e}"));
+            [build(&shop), build(&room)]
+        })
+    }
+
+    fn context() -> Context {
+        static FONTS: OnceLock<egui::FontDefinitions> = OnceLock::new();
+        let ctx = Context::default();
+        ctx.set_fonts(
+            FONTS
+                .get_or_init(|| crate::system_fonts().unwrap_or_else(|| panic!("no font")))
+                .clone(),
+        );
+        ctx
+    }
+
+    /// One frame of the plan filling a 1600 x 1000 window; what it picked.
+    fn frame(
+        ctx: &Context,
+        plan: &mut PlanView,
+        scene: &Scene,
+        events: Vec<egui::Event>,
+    ) -> (Option<Pick>, Vec<ClippedShape>) {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))),
+            events,
+            ..RawInput::default()
+        };
+        let mut picked = None;
+        let mut o = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                if let Event::Picked(p) = plan.show(ui, scene) {
+                    picked = Some(p);
+                }
+            });
+        });
+        o.textures_delta.clear();
+        (picked, o.shapes)
+    }
+
+    /// The lines and circles in `shapes` stroked in `color`: segments as
+    /// their two ends, circles as their center twice.
+    fn strokes(shapes: &[ClippedShape], color: Color32) -> Vec<[Pos2; 2]> {
+        fn walk(shape: &Shape, color: Color32, out: &mut Vec<[Pos2; 2]>) {
+            match shape {
+                Shape::LineSegment { points, stroke } if stroke.color == color => {
+                    out.push(*points);
+                }
+                Shape::Circle(c) if c.stroke.color == color => out.push([c.center, c.center]),
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, color, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, color, &mut out));
+        out
+    }
+
+    /// Whether any line or circle in `shapes` is stroked in `color`.
+    pub(crate) fn drawn(shapes: &[ClippedShape], color: Color32) -> bool {
+        !strokes(shapes, color).is_empty()
+    }
+
+    /// Checks that what is stroked in `color` is `picked`'s mark: every
+    /// stroke lies on it, and it is drawn if the mark passes within 300 px
+    /// of `pointer` (so on the canvas). A mark far off the canvas (the
+    /// nearest face of a thick wall, zoomed in close) draws nothing.
+    fn shows(
+        shapes: &[ClippedShape],
+        color: Color32,
+        scene: &Scene,
+        v: &Viewport,
+        picked: &Picked,
+        pointer: Pos2,
+    ) -> Result<(), String> {
+        let drawn = strokes(shapes, color);
+        let on = |a: f32, b: f64| (f64::from(a) - b).abs() < 0.01;
+        // The mark's screen line: vertical at x, or horizontal at y.
+        let (vertical, at, distance) = match mark(scene, picked) {
+            Some(Mark::Segment(a, b)) if a.0 == b.0 => {
+                let x = v.to_screen(a).x;
+                (true, x, (f64::from(pointer.x) - x).abs())
+            }
+            Some(Mark::Segment(a, _)) => {
+                let y = v.to_screen(a).y;
+                (false, y, (f64::from(pointer.y) - y).abs())
+            }
+            Some(Mark::XLine(x)) => {
+                let x = v.to_screen((x, 0)).x;
+                (true, x, (f64::from(pointer.x) - x).abs())
+            }
+            Some(Mark::YLine(y)) => {
+                let y = v.to_screen((0, y)).y;
+                (false, y, (f64::from(pointer.y) - y).abs())
+            }
+            Some(Mark::Point(p)) => {
+                let s = v.to_screen(p);
+                for [a, b] in &drawn {
+                    if !(on(a.x, s.x) && on(a.y, s.y) && a == b) {
+                        return Err(format!("{a:?} is not the point {s:?}"));
+                    }
+                }
+                let d = (f64::from(pointer.x) - s.x).hypot(f64::from(pointer.y) - s.y);
+                if d <= 300.0 && drawn.is_empty() {
+                    return Err(format!("{} not drawn", picked.name));
+                }
+                return Ok(());
+            }
+            None => return Err(format!("{} has no mark", picked.name)),
+        };
+        for [a, b] in &drawn {
+            let ok = if vertical {
+                on(a.x, at) && on(b.x, at)
+            } else {
+                on(a.y, at) && on(b.y, at)
+            };
+            if !ok {
+                return Err(format!("{a:?}-{b:?} is not on {} at {at}", picked.name));
+            }
+        }
+        if distance <= 300.0 && drawn.is_empty() {
+            return Err(format!("{} not drawn, {distance} px away", picked.name));
+        }
+        Ok(())
+    }
+
+    fn button(at: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// A world point on a wall or datum of `scene`: the `i`th of them, at
+    /// fractions `s`, `t` of its extent.
+    fn target(scene: &Scene, i: usize, s: f64, t: f64) -> World {
+        let lerp = |a: i64, b: i64, f: f64| a + ((b - a) as f64 * f) as i64;
+        let n = scene.walls.len() + scene.datums.len();
+        let i = i % n;
+        if let Some(w) = scene.walls.get(i) {
+            let xs = w.footprint.iter().map(|p| p.0);
+            let ys = w.footprint.iter().map(|p| p.1);
+            let (x0, x1) = (xs.clone().min().unwrap_or(0), xs.max().unwrap_or(0));
+            let (y0, y1) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
+            return (lerp(x0, x1, s), lerp(y0, y1, t));
+        }
+        let far = 30 * 304_800_000;
+        match scene.datums.get(i - scene.walls.len()).map(|d| d.geometry) {
+            Some(DatumGeometry::Point { x, y }) => (x.nanometers(), y.nanometers()),
+            Some(DatumGeometry::XLine { x }) => (x.nanometers(), lerp(-far, far, t)),
+            Some(DatumGeometry::YLine { y }) => (lerp(-far, far, s), y.nanometers()),
+            None => (0, 0),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        /// Done when: the highlighted reference is always the one a click
+        /// at that point picks, over the shop fixture and the T-203 room,
+        /// at any zoom and pointer position. The first pick then stays
+        /// highlighted and the status line names both.
+        #[test]
+        fn the_highlighted_reference_is_the_one_a_click_picks(
+            room in any::<bool>(),
+            i in 0usize..1000,
+            s in 0.0f64..=1.0,
+            t in 0.0f64..=1.0,
+            zoom in 0.0f64..=1.0,
+            dx in -20.0f32..20.0,
+            dy in -20.0f32..20.0,
+        ) {
+            let scene = &scenes()[usize::from(room)];
+            let at = target(scene, i, s, t);
+            let scale = MIN_SCALE * (MAX_SCALE / MIN_SCALE).powf(zoom);
+            let ctx = context();
+            let mut plan = PlanView::new();
+            plan.dimensions = Some(DimensionTool::default());
+            plan.viewport = Some(Viewport::new(at, scale, Screen { x: 0.0, y: 0.0 }));
+            frame(&ctx, &mut plan, scene, Vec::new());
+            let v = plan.viewport.clone().unwrap_or_else(|| panic!("viewport"));
+            let p = pos(v.to_screen(at)) + vec2(dx, dy);
+
+            // Hovering: the highlight is drawn exactly when a reference is
+            // under the pointer, and the status line names it.
+            frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+            let (_, shapes) = frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+            let hovered = plan.hover.clone();
+            prop_assert!(!drawn(&shapes, PICKED));
+            match &hovered {
+                Some(h) => {
+                    let shown = shows(&shapes, HOVER, scene, &v, h, p);
+                    prop_assert!(shown.is_ok(), "{:?}", shown);
+                }
+                None => prop_assert!(!drawn(&shapes, HOVER)),
+            }
+            if let Some(h) = &hovered {
+                let named = format!("under the pointer: {}", h.name);
+                prop_assert!(plan.instruction().ends_with(&named), "{}", plan.instruction());
+            }
+
+            // A click there picks that reference, or is refused if none.
+            frame(&ctx, &mut plan, scene, vec![button(p, true)]);
+            let (picked, _) = frame(&ctx, &mut plan, scene, vec![button(p, false)]);
+            let first = plan.dimensions.as_ref().and_then(DimensionTool::first).cloned();
+            prop_assert_eq!(&first, &hovered, "at {:?} scale {}", p, scale);
+            match &hovered {
+                Some(_) => prop_assert_eq!(picked, Some(Pick::First)),
+                None => prop_assert!(matches!(picked, Some(Pick::Refused(_)))),
+            }
+
+            // The first pick stays highlighted; the status line names both.
+            let (_, shapes) = frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+            match &hovered {
+                Some(h) => {
+                    let shown = shows(&shapes, PICKED, scene, &v, h, p);
+                    prop_assert!(shown.is_ok(), "{:?}", shown);
+                }
+                None => prop_assert!(!drawn(&shapes, PICKED)),
+            }
+            if let Some(h) = &hovered {
+                prop_assert_eq!(
+                    plan.instruction(),
+                    format!(
+                        "Dimension from {}: pick the second reference, Esc to cancel; \
+                         under the pointer: {}",
+                        h.name, h.name
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_is_highlighted_outside_dimension_mode() {
+        let scene = &scenes()[1];
+        let ctx = context();
+        let mut plan = PlanView::new();
+        let wall = scene.walls.first().unwrap_or_else(|| panic!("walls"));
+        let at = wall.footprint.first().copied().unwrap_or((0, 0));
+        plan.viewport = Some(Viewport::new(at, 1e-6, Screen { x: 0.0, y: 0.0 }));
+        frame(&ctx, &mut plan, scene, Vec::new());
+        let v = plan.viewport.clone().unwrap_or_else(|| panic!("viewport"));
+        let p = pos(v.to_screen(at));
+        plan.dimensions = Some(DimensionTool::default());
+        frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+        frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+        assert!(plan.hover.is_some(), "a reference at the wall corner");
+        plan.dimensions = None;
+        let (_, shapes) = frame(&ctx, &mut plan, scene, vec![egui::Event::PointerMoved(p)]);
+        assert!(plan.hover.is_none());
+        assert!(!drawn(&shapes, HOVER) && !drawn(&shapes, PICKED));
+        assert!(!plan.instruction().contains("under the pointer"));
     }
 }

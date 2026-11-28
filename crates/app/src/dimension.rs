@@ -20,7 +20,7 @@ use archviz_core::{
     describe_constraint, format_length, parse_length, reference_coordinate,
 };
 
-use crate::scene::Scene;
+use crate::scene::{Scene, WallShape};
 use crate::session::Pending;
 use crate::viewport::World;
 
@@ -95,8 +95,22 @@ pub fn pick(scene: &Scene, at: World, tolerance: i64) -> Option<Picked> {
     }
     let w = scene.wall_at(at, tolerance)?;
     let v = on(w.across, at);
+    // The nearest; on a tie the first listed (a face before the center).
+    let (_, reference, what) = wall_references(w)?
+        .into_iter()
+        .min_by_key(|(c, _, _)| distance(*c, v))?;
+    Some(Picked {
+        reference,
+        axis: Some(w.across),
+        name: format!("{} {what}", w.label),
+    })
+}
+
+/// A wall's pickable references with their coordinates across it: the left
+/// face, the right face and the center, in that order.
+fn wall_references(w: &WallShape) -> Option<[(i64, Reference, &'static str); 3]> {
     let center = i64::try_from((i128::from(w.left) + i128::from(w.right)) / 2).ok()?;
-    let candidates = [
+    Some([
         (
             w.left,
             Reference::WallFace {
@@ -116,16 +130,52 @@ pub fn pick(scene: &Scene, at: World, tolerance: i64) -> Option<Picked> {
             "right face",
         ),
         (center, Reference::WallCenter { wall: w.id }, "center"),
-    ];
-    // The nearest; on a tie the first listed (a face before the center).
-    let (_, reference, what) = candidates
-        .into_iter()
-        .min_by_key(|(c, _, _)| distance(*c, v))?;
-    Some(Picked {
-        reference,
-        axis: Some(w.across),
-        name: format!("{} {what}", w.label),
-    })
+    ])
+}
+
+/// Where a picked reference lies in the plan, for its highlight (T-204c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// A wall face or center: the line across the wall at its coordinate,
+    /// along the wall's length.
+    Segment(World, World),
+    /// A datum line at this X.
+    XLine(i64),
+    /// A datum line at this Y.
+    YLine(i64),
+    /// A point datum.
+    Point(World),
+}
+
+/// The mark of `picked` in `scene`, read from the same coordinates `pick`
+/// chooses between; None if the scene no longer holds it.
+pub fn mark(scene: &Scene, picked: &Picked) -> Option<Mark> {
+    match picked.reference {
+        Reference::Datum { datum } => {
+            let d = scene.datums.iter().find(|d| d.id == datum)?;
+            Some(match d.geometry {
+                DatumGeometry::Point { x, y } => Mark::Point((x.nanometers(), y.nanometers())),
+                DatumGeometry::XLine { x } => Mark::XLine(x.nanometers()),
+                DatumGeometry::YLine { y } => Mark::YLine(y.nanometers()),
+            })
+        }
+        Reference::WallFace { wall, .. } | Reference::WallCenter { wall } => {
+            let w = scene.walls.iter().find(|w| w.id == wall)?;
+            let (c, _, _) = wall_references(w)?
+                .into_iter()
+                .find(|(_, r, _)| *r == picked.reference)?;
+            let along = w.footprint.iter().map(|p| match w.across {
+                Axis::X => p.1,
+                Axis::Y => p.0,
+            });
+            let (lo, hi) = (along.clone().min()?, along.max()?);
+            Some(match w.across {
+                Axis::X => Mark::Segment((c, lo), (c, hi)),
+                Axis::Y => Mark::Segment((lo, c), (hi, c)),
+            })
+        }
+        _ => None,
+    }
 }
 
 impl DimensionTool {
@@ -402,6 +452,62 @@ mod tests {
         assert_eq!(p.name, "datum \"Origin\"");
         let line = pick(&s, (360 * IN + 5, 1_000 * IN), IN).unwrap_or_else(|| panic!());
         assert_eq!(line.axis, Some(Axis::X));
+    }
+
+    #[test]
+    fn the_mark_lies_on_the_picked_reference() {
+        let s = scene();
+        let ft = 12 * IN;
+        let h = 9 * IN / 4;
+        let mark_at = |p: World| {
+            let picked = pick(&s, p, IN).unwrap_or_else(|| panic!("nothing at {p:?}"));
+            (picked.name.clone(), mark(&s, &picked))
+        };
+        assert_eq!(
+            mark_at((5 * ft, 2 * IN)),
+            (
+                "W-001 left face".into(),
+                Some(Mark::Segment((0, h), (10 * ft, h)))
+            )
+        );
+        assert_eq!(
+            mark_at((5 * ft, -2 * IN)),
+            (
+                "W-001 right face".into(),
+                Some(Mark::Segment((0, -h), (10 * ft, -h)))
+            )
+        );
+        assert_eq!(
+            mark_at((5 * ft, IN / 4)),
+            (
+                "W-001 center".into(),
+                Some(Mark::Segment((0, 0), (10 * ft, 0)))
+            )
+        );
+        assert_eq!(
+            mark_at((20 * ft + 2 * IN, 6 * IN)),
+            (
+                "W-002 right face".into(),
+                Some(Mark::Segment((20 * ft + h, 0), (20 * ft + h, ft)))
+            )
+        );
+        assert_eq!(
+            mark_at((-5 * ft, -5 * ft + 3)),
+            (
+                "datum \"Origin\"".into(),
+                Some(Mark::Point((-5 * ft, -5 * ft)))
+            )
+        );
+        assert_eq!(
+            mark_at((30 * ft, 7)),
+            ("datum \"Grid A\"".into(), Some(Mark::XLine(30 * ft)))
+        );
+        let gone = Picked {
+            reference: Reference::WallCenter { wall: uid(9) },
+            axis: Some(Axis::X),
+            name: "W-009 center".into(),
+        };
+        assert_eq!(mark(&s, &gone), None, "a reference the scene lacks");
     }
 
     #[test]

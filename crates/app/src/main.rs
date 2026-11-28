@@ -618,6 +618,12 @@ impl App {
     }
 
     fn plan(&mut self, ui: &mut egui::Ui) {
+        // Esc cancels a picked pair as it cancels a first pick; until then
+        // its first reference stays highlighted (T-204c).
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.dimension = None;
+        }
+        self.plan.held = self.dimension.as_ref().map(|(pair, _)| pair.a.clone());
         let Some(session) = &self.session else {
             return;
         };
@@ -968,6 +974,119 @@ mod tests {
             "Message 7 (review).",
             "Review Node in the panel",
         );
+    }
+
+    /// Runs a few frames with the pointer at `pointer` and `events` in the
+    /// first; whether the first pick's highlight is drawn in the last.
+    fn highlighted(ctx: &Context, app: &mut App, pointer: Pos2, events: Vec<egui::Event>) -> bool {
+        let mut shapes = Vec::new();
+        for n in 0..3 {
+            let mut i = input(pointer);
+            if n == 0 {
+                i.events.extend(events.clone());
+            }
+            let mut o = ctx.run_ui(i, |ui| app.layout(ui));
+            o.textures_delta.clear();
+            shapes = o.shapes;
+        }
+        crate::plan_view::tests::drawn(&shapes, crate::plan_view::PICKED)
+    }
+
+    /// A press and release of the primary button on the text `label`.
+    fn click_on(ctx: &Context, app: &mut App, label: &str) -> bool {
+        let drawn = texts(ctx, app);
+        let (_, rect) = drawn
+            .iter()
+            .find(|(t, _)| t == label)
+            .unwrap_or_else(|| panic!("{label} not drawn"));
+        let at = rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        highlighted(ctx, app, at, vec![press(true)]);
+        highlighted(ctx, app, at, vec![press(false)])
+    }
+
+    /// `highlighted` with the pointer over the plan.
+    fn first_pick_drawn(ctx: &Context, app: &mut App, events: Vec<egui::Event>) -> bool {
+        highlighted(ctx, app, Pos2::new(1200.0, 600.0), events)
+    }
+
+    fn escape() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// Done when: the first pick's highlight clears on Propose, Cancel and
+    /// Esc. It stays while the second reference is picked and while the
+    /// value is typed.
+    #[test]
+    fn the_first_pick_highlight_clears_on_propose_cancel_and_esc() {
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = shop("first-pick");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        app.toggle_dimensions();
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let wall = scene.walls.first().unwrap_or_else(|| panic!("walls"));
+        let other = scene
+            .walls
+            .iter()
+            .find(|w| w.id != wall.id && w.across == wall.across)
+            .unwrap_or_else(|| panic!("a parallel wall"));
+        let center = |w: &crate::scene::WallShape| dimension::Picked {
+            reference: archviz_core::Reference::WallCenter { wall: w.id },
+            axis: Some(w.across),
+            name: format!("{} center", w.label),
+        };
+        // Both picks, as the plan reports them to the app.
+        let pick_both = |app: &mut App| {
+            let tool = app.plan.dimensions.as_mut().unwrap_or_else(|| panic!());
+            assert_eq!(tool.click(Some(center(wall))), dimension::Pick::First);
+            let dimension::Pick::Ready(pair) = tool.click(Some(center(other))) else {
+                panic!("a pair")
+            };
+            app.dimension = Some((pair, String::new()));
+        };
+        assert!(!first_pick_drawn(&ctx, &mut app, Vec::new()), "nothing yet");
+
+        // Esc while the second reference is picked.
+        let tool = app.plan.dimensions.as_mut().unwrap_or_else(|| panic!());
+        tool.click(Some(center(wall)));
+        assert!(first_pick_drawn(&ctx, &mut app, Vec::new()));
+        assert!(!first_pick_drawn(&ctx, &mut app, vec![escape()]));
+        assert!(app.plan.first_pick().is_none());
+
+        // Esc while the value is typed.
+        pick_both(&mut app);
+        assert!(first_pick_drawn(&ctx, &mut app, Vec::new()));
+        assert_eq!(app.plan.first_pick(), Some(&center(wall)));
+        assert!(!first_pick_drawn(&ctx, &mut app, vec![escape()]));
+        assert!(app.dimension.is_none() && app.plan.first_pick().is_none());
+
+        // Cancel.
+        pick_both(&mut app);
+        assert!(first_pick_drawn(&ctx, &mut app, Vec::new()));
+        assert!(!click_on(&ctx, &mut app, "Cancel"));
+        assert!(app.dimension.is_none() && app.plan.first_pick().is_none());
+
+        // Propose: the proposal goes to review and the highlight clears.
+        pick_both(&mut app);
+        if let Some((_, text)) = &mut app.dimension {
+            *text = "10'".to_string();
+        }
+        assert!(first_pick_drawn(&ctx, &mut app, Vec::new()));
+        assert!(!click_on(&ctx, &mut app, "Propose"));
+        assert!(app.pending.is_some(), "{}", app.message);
+        assert!(app.dimension.is_none() && app.plan.first_pick().is_none());
     }
 
     #[test]

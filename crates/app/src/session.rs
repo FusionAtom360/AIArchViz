@@ -576,7 +576,7 @@ mod draw_tests {
 }
 
 #[cfg(test)]
-mod dimension_tests {
+pub(crate) mod dimension_tests {
     use super::{Pending, Session, confirmed};
     use crate::dimension::{
         DimensionTool, Pick, conflicts, distance_action, parse_value, pick, underconstrained_walls,
@@ -676,6 +676,60 @@ mod dimension_tests {
         session
             .propose(action)
             .unwrap_or_else(|e| panic!("{text}: {e}"))
+    }
+
+    /// The room the T-203 test builds, as the app builds it: setup, four
+    /// drawn walls, the four typed dimensions and a 6" total, each
+    /// confirmed. The project folder and the finished document.
+    pub(crate) fn t203_room(tag: &str) -> (std::path::PathBuf, Document) {
+        let (dir, _) = empty_project(tag);
+        let session = Session::open(&dir, Box::new(|| {})).unwrap_or_else(|e| panic!("{e:?}"));
+        let setup = commands(&session, setup_actions(&session.document()));
+        let pending = session
+            .propose_commands(setup)
+            .unwrap_or_else(|e| panic!("{e}"));
+        confirm(&session, &pending);
+        let storey = storey_for(&session.document()).unwrap_or_else(|| panic!("a storey"));
+        let run = Run {
+            points: vec![(0, 0), (10 * FT, 0), (10 * FT, 10 * FT), (0, 10 * FT)],
+            closed: true,
+        };
+        let walls = run_commands(&run, storey, || session.ids()).unwrap_or_else(|| panic!());
+        let pending = session
+            .propose_commands(walls)
+            .unwrap_or_else(|e| panic!("{e}"));
+        confirm(&session, &pending);
+        let typed = [
+            (None, Direction::NegY, "0\"", "0'-0\""),
+            (None, Direction::PosX, "0 in", "0'-0\""),
+            (
+                Some(Direction::NegY),
+                Direction::PosY,
+                "14' 6 1/2\"",
+                "14'-6 1/2\"",
+            ),
+            (Some(Direction::PosX), Direction::NegX, "135in", "11'-3\""),
+        ];
+        for (from, to, text, echo) in typed {
+            let now = Scene::build(&session.document()).unwrap_or_else(|e| panic!("{e}"));
+            let a = from.map_or((3, -2), |d| on_right_face(&wall(&now, d)));
+            let b = on_right_face(&wall(&now, to));
+            let pending = dimension(&session, a, b, text, echo);
+            confirm(&session, &pending);
+        }
+        let doc = session.document();
+        let groups = wall_groups(&doc);
+        let group = groups.first().unwrap_or_else(|| panic!("a group"));
+        let six = parse_value("6\"", doc.project.default_unit).unwrap_or_else(|e| panic!("{e}"));
+        let layers = with_total(&group.layers, six).unwrap_or_else(|e| panic!("{e}"));
+        let actions = set_layers(group, &layers).unwrap_or_else(|e| panic!("{e}"));
+        let pending = session
+            .propose_commands(commands(&session, actions))
+            .unwrap_or_else(|e| panic!("{e}"));
+        confirm(&session, &pending);
+        let doc = session.document();
+        drop(session);
+        (dir, doc)
     }
 
     /// Done when: a user can build a rectangular room from four typed
