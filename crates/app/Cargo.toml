@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 archviz-cli = { version = "0.1.0", path = "../cli" }
 archviz-core = { version = "0.1.0", path = "../core" }
+archviz-export = { version = "0.1.0", path = "../export" }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "clipboard"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }

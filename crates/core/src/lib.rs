@@ -35,6 +35,7 @@ mod space;
 mod underlay;
 mod units;
 mod validity;
+mod view;
 
 pub use canonical::{
     CanonicalError, document_schema_json, from_canonical_json, to_canonical_json, to_pretty_json,
@@ -94,3 +95,4 @@ pub use units::{
 pub use validity::{
     Detail, Violation, WallTopProblem, blocks_commit, prune_acknowledged, validate,
 };
+pub use view::{CameraPitch, CameraPose, ViewContext};

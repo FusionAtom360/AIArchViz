@@ -217,10 +217,15 @@ impl DimensionTool {
 /// 1/16 in grid enforced with the nearest grid value offered (5.3), never
 /// negative. The caller echoes the result with `format_length`.
 pub fn parse_value(text: &str, unit: ProjectUnit) -> Result<Length, String> {
+    match parse_signed(text, unit) {
+        Ok(length) if length.nanometers() < 0 => Err("a distance cannot be negative".to_string()),
+        other => other,
+    }
+}
+
+/// A user-typed coordinate, which may be negative, on the 1/16 in grid (5.3).
+pub fn parse_signed(text: &str, unit: ProjectUnit) -> Result<Length, String> {
     match parse_length(text, InputContext::User, unit) {
-        Ok(parsed) if parsed.length.nanometers() < 0 => {
-            Err("a distance cannot be negative".to_string())
-        }
         Ok(parsed) => Ok(parsed.length),
         Err(ParseError::OffGrid { nearest }) => Err(format!(
             "finer than 1/16 in; the nearest value is {}",

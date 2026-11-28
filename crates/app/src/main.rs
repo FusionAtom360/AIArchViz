@@ -44,12 +44,22 @@
 //! proposal, reviewed like any other; the image is drawn under the plan and
 //! never drives geometry. A dimension can be marked transcribed from the
 //! underlay: source Measured, provenance Transcribed.
+//!
+//! T-206 (13.1, D-14) adds the 3D viewer (viewer.rs): the "3D view" button
+//! swaps the plan for a wgpu view of the export crate's exact solids, with
+//! orbit and walk navigation, picking, a section plane and point-to-point
+//! measurement in feet-inches between exact vertices. It provides the view
+//! context (9.1): camera pose, heading, selection and hovered entity, shown
+//! in the info panel as get_view_context will return it.
 
+mod camera;
 mod dimension;
 mod dimension_layout;
 mod drag;
 mod draw;
+mod gpu;
 mod interview;
+mod model3d;
 mod plan_view;
 mod review;
 mod scene;
@@ -57,6 +67,7 @@ mod session;
 mod snap;
 mod status;
 mod underlay;
+mod viewer;
 mod viewport;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -161,6 +172,11 @@ struct App {
     textures: BTreeMap<String, Result<Uploaded, String>>,
     /// A typed dimension is transcribed from the underlay (6.6).
     transcribed: bool,
+    /// The 3D view is shown in place of the plan (T-206).
+    view3d: bool,
+    viewer: viewer::Viewer,
+    /// The window's wgpu renderer; None in tests.
+    render: Option<eframe::egui_wgpu::RenderState>,
 }
 
 const WARN: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
@@ -237,6 +253,9 @@ impl App {
             calibration: None,
             textures: BTreeMap::new(),
             transcribed: false,
+            view3d: false,
+            viewer: viewer::Viewer::new(),
+            render: None,
         }
     }
 
@@ -245,6 +264,7 @@ impl App {
         self.view = None;
         self.scene = None;
         self.plan = PlanView::new();
+        self.viewer = viewer::Viewer::new();
         self.pending = None;
         self.dimension = None;
         self.checked = None;
@@ -1012,10 +1032,69 @@ impl App {
             None => describe(&self.scene, self.plan.selected),
         };
         ui.label(format!("Selection: {selection}"));
+        if self.view3d {
+            self.view_context(ui);
+        }
         self.dimension_box(ui);
         self.review(ui);
         self.underlay_panel(ui);
         self.interview(ui);
+    }
+
+    /// Swaps the plan and the 3D view; the plan's selection carries over.
+    fn toggle_3d(&mut self) {
+        self.view3d = !self.view3d;
+        if self.view3d {
+            self.viewer.selected = self.plan.selected.map(|e| match e {
+                Entity::Wall(id)
+                | Entity::Opening(id)
+                | Entity::Occurrence(id)
+                | Entity::Slab(id) => id,
+            });
+        }
+    }
+
+    /// The view context as get_view_context returns it (9.1).
+    fn view_context(&self, ui: &mut egui::Ui) {
+        let context = self.viewer.context();
+        let c = &context.camera;
+        ui.label(format!(
+            "View: eye ({}, {}, {}), heading {}.{:03} deg, pitch {}{}.{:03} deg",
+            format_length(c.x),
+            format_length(c.y),
+            format_length(c.z),
+            c.heading.value() / 1000,
+            c.heading.value() % 1000,
+            if c.pitch.value() < 0 { "-" } else { "" },
+            c.pitch.value().unsigned_abs() / 1000,
+            c.pitch.value().unsigned_abs() % 1000,
+        ));
+        egui::CollapsingHeader::new("View context").show(ui, |ui| {
+            let json = archviz_core::to_canonical_json(&context).unwrap_or_else(|e| e.to_string());
+            ui.monospace(json);
+        });
+    }
+
+    fn view_3d(&mut self, ui: &mut egui::Ui) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let (version, unit) = (session.version(), session.document().project.default_unit);
+        let event = self
+            .viewer
+            .show(ui, self.render.as_ref(), version, unit, || {
+                session.document()
+            });
+        if let viewer::Event::Select(picked) = event {
+            self.plan.selected_dimension = None;
+            self.plan.selected = picked.and_then(|(id, kind)| match kind {
+                "wall" => Some(Entity::Wall(id)),
+                "door" | "window" => Some(Entity::Opening(id)),
+                "slab" => Some(Entity::Slab(id)),
+                "occurrence" => Some(Entity::Occurrence(id)),
+                _ => None,
+            });
+        }
     }
 
     fn plan(&mut self, ui: &mut egui::Ui) {
@@ -1133,6 +1212,9 @@ impl App {
         if let Some(c) = &self.calibration {
             return c.instruction();
         }
+        if self.view3d {
+            return self.viewer.instruction();
+        }
         self.plan.instruction()
     }
 
@@ -1151,7 +1233,9 @@ impl App {
 
     /// The one status line (Q-81 (a)).
     fn status(&self) -> String {
-        let coordinates = if self.session.is_some() {
+        let coordinates = if self.session.is_some() && self.view3d {
+            self.viewer.readout()
+        } else if self.session.is_some() {
             self.plan.coordinates()
         } else {
             String::new()
@@ -1166,8 +1250,15 @@ impl App {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::selectable(self.view3d, "3D view"))
+                    .clicked()
+                {
+                    self.toggle_3d();
+                }
                 if ui.button("Fit").clicked() {
                     self.plan.fit();
+                    self.viewer.fit();
                 }
                 let drawing = self.plan.walls.is_some();
                 if ui
@@ -1198,7 +1289,13 @@ impl App {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.info(ui));
             });
-        egui::CentralPanel::default().show(ui, |ui| self.plan(ui));
+        egui::CentralPanel::default().show(ui, |ui| {
+            if self.view3d {
+                self.view_3d(ui);
+            } else {
+                self.plan(ui);
+            }
+        });
     }
 }
 
@@ -1218,7 +1315,9 @@ fn main() -> std::process::ExitCode {
         eframe::NativeOptions::default(),
         Box::new(move |cc| {
             cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(App::new()))
+            let mut app = App::new();
+            app.render = cc.wgpu_render_state.clone();
+            Ok(Box::new(app))
         }),
     );
     match result {
@@ -1987,5 +2086,158 @@ mod tests {
             .unwrap_or_else(|| panic!("top_bar not found"));
         assert_eq!(body.matches("top_text(ui, ").count(), 4);
         assert!(!body.contains("text_edit") && !body.contains("TextEdit"));
+    }
+
+    /// T-206 done when: measuring a known wall length in the 3D view reads
+    /// exactly. Each end of a wall's longest footprint edge (a length read
+    /// from core) is framed and clicked a few pixels inside the wall's top
+    /// face, at fractional pointer positions; the status line shows the
+    /// length with no ~.
+    #[test]
+    fn measuring_a_known_wall_length_in_the_3d_view_reads_exactly() {
+        use crate::camera::P3;
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = shop("viewer-measure");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        assert!(app.session.is_some(), "{}", app.message);
+        app.toggle_3d();
+        texts(&ctx, &mut app);
+        assert!(app.viewer.rect.is_some(), "the 3D view is drawn");
+        app.viewer.measuring = true;
+
+        let model = crate::model3d::Model::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let geometry = archviz_core::wall_geometry(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let mut measured = Vec::new();
+        for (id, wall) in &doc.walls {
+            let Some(g) = geometry.get(id) else { continue };
+            let fp: Vec<(i128, i128)> = g
+                .footprint
+                .iter()
+                .map(|p| (i128::from(p.x.nanometers()), i128::from(p.y.nanometers())))
+                .collect();
+            let n = fp.len();
+            let Some((p, q)) = (0..n)
+                .map(|i| (fp[i], fp[(i + 1) % n]))
+                .max_by_key(|(p, q)| ((q.0 - p.0).abs() + (q.1 - p.1).abs(), *p))
+            else {
+                continue;
+            };
+            let known = (q.0 - p.0).abs() + (q.1 - p.1).abs();
+            let Some(item) = model.items.iter().find(|i| i.id == *id) else {
+                panic!("{} has no solid", wall.label);
+            };
+            let verts: Vec<P3> = item.triangles.iter().flatten().copied().collect();
+            let top = |xy: (i128, i128)| {
+                verts
+                    .iter()
+                    .filter(|v| (v[0], v[1]) == xy)
+                    .map(|v| v[2])
+                    .max()
+                    .unwrap_or(0)
+            };
+            let (a, b) = ([p.0, p.1, top(p)], [q.0, q.1, top(q)]);
+            let tops: Vec<&P3> = verts.iter().filter(|v| v[2] == a[2]).collect();
+            let middle =
+                [0, 1, 2].map(|k| tops.iter().map(|v| v[k]).sum::<i128>() / tops.len() as i128);
+            app.viewer.measure = None;
+            for (end, frac) in [(a, (0.37, -0.29)), (b, (-0.41, 0.13))] {
+                app.viewer.camera.look_at(end, 8.0 * 304_800_000.0);
+                let rect = app.viewer.rect.unwrap_or_else(|| panic!("no 3D view"));
+                let size = [f64::from(rect.width()), f64::from(rect.height())];
+                let cam = &app.viewer.camera;
+                let span: Vec<f64> = (0..3).map(|k| (middle[k] - end[k]) as f64).collect();
+                let k = 6.0 * 25_400_000.0 / span.iter().map(|v| v * v).sum::<f64>().sqrt();
+                let toward = [0, 1, 2].map(|i| end[i] + (span[i] * k).round() as i128);
+                let (Some(e), Some(t)) = (cam.project(end, size), cam.project(toward, size)) else {
+                    panic!("behind the eye");
+                };
+                let s = 3.0 / (t[0] - e[0]).hypot(t[1] - e[1]).max(3.0);
+                let at = Pos2::new(
+                    rect.min.x + (e[0] + (t[0] - e[0]) * s + frac.0) as f32,
+                    rect.min.y + (e[1] + (t[1] - e[1]) * s + frac.1) as f32,
+                );
+                let press = |pressed| egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                };
+                shapes_after(&ctx, &mut app, at, vec![press(true)]);
+                shapes_after(&ctx, &mut app, at, vec![press(false)]);
+            }
+            let Some(m) = app.viewer.measure else {
+                continue;
+            };
+            if (m.a, m.b) != (a, b) {
+                // The pointer landed on a neighbour at a corner.
+                continue;
+            }
+            let length = archviz_core::Length::from_nanometers(known as i64);
+            let want = format!("Measured {} (", format_length(length));
+            assert!(!want.contains('~'));
+            let status = app.status();
+            assert!(status.contains(&want), "{}: {status}", wall.label);
+            measured.push(format!("{} {}", wall.label, format_length(length)));
+        }
+        eprintln!("measured exactly in the 3D view: {measured:?}");
+        assert!(measured.len() >= 4, "{measured:?}");
+    }
+
+    /// T-206 done when: the view context matches the camera. The info panel
+    /// shows the context get_view_context returns, and its selection is
+    /// what a click in the 3D view selected.
+    #[test]
+    fn the_view_context_follows_the_3d_camera_and_selection() {
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = shop("viewer-context");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        app.toggle_3d();
+        texts(&ctx, &mut app);
+        let rect = app.viewer.rect.unwrap_or_else(|| panic!("no 3D view"));
+        let at = rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        shapes_after(&ctx, &mut app, at, vec![press(true)]);
+        shapes_after(&ctx, &mut app, at, vec![press(false)]);
+        let context = app.viewer.context();
+        let selected = app
+            .viewer
+            .selected
+            .unwrap_or_else(|| panic!("nothing picked"));
+        assert_eq!(context.selection, vec![selected]);
+        assert_eq!(context.hovered, Some(selected));
+        assert_eq!(context.camera, app.viewer.camera.pose());
+        assert!(
+            doc.walls.contains_key(&selected)
+                || doc.slabs.contains_key(&selected)
+                || doc.openings.contains_key(&selected)
+                || doc.occurrences.contains_key(&selected)
+                || doc.ceilings.contains_key(&selected)
+                || doc.roofs.contains_key(&selected)
+        );
+        // Dragging turns the camera; the context follows.
+        let before = app.viewer.context().camera;
+        let drag = vec![
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+            egui::Event::PointerMoved(at + vec2(120.0, 0.0)),
+        ];
+        shapes_after(&ctx, &mut app, at, drag);
+        let after = app.viewer.context().camera;
+        assert_ne!(before.heading, after.heading);
+        assert_eq!(after, app.viewer.camera.pose());
+        let json = archviz_core::to_canonical_json(&app.viewer.context())
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(json.starts_with("{\"camera\":{\"heading\":"), "{json}");
     }
 }

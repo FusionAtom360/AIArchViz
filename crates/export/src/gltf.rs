@@ -695,6 +695,63 @@ fn view(bin: &mut Vec<u8>, views: &mut Vec<Value>, bytes: &[u8], target: u32) ->
 }
 
 /// Every element of `document` in node order (see the module docs).
+/// A planar face triangulated in the plane it projects onto best; the
+/// triangles index `face` and keep its winding.
+fn face_triangles(face: &[P3]) -> Option<Vec<[usize; 3]>> {
+    let n = newell(face);
+    let k = (0..3)
+        .max_by_key(|&k| (n[k].abs(), std::cmp::Reverse(k)))
+        .unwrap_or(2);
+    let (u, v) = ((k + 1) % 3, (k + 2) % 3);
+    let flat: Vec<P2> = face.iter().map(|p| (p[u], p[v])).collect();
+    triangulate(&flat)
+}
+
+/// One planar face of a [`Solid`]: its outline in world nanometers, wound
+/// counterclockwise seen from outside, and the triangles that cover it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Face {
+    pub points: Vec<[i128; 3]>,
+    /// Indices into `points`, each with the face's winding.
+    pub triangles: Vec<[usize; 3]>,
+}
+
+/// An element's mesh in exact world nanometers, as the GLB carries it:
+/// for the app's 3D viewer (T-206), which measures on these vertices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Solid {
+    pub id: Uuid,
+    /// wall, door, window, slab, ceiling, roof or occurrence.
+    pub kind: &'static str,
+    pub name: String,
+    pub faces: Vec<Face>,
+}
+
+/// Every element with a mesh, in GLB node order; datums have none.
+pub fn solids(document: &Document) -> Result<Vec<Solid>, GltfError> {
+    let mut out = Vec::new();
+    for e in elements(document)? {
+        if e.faces.is_empty() {
+            continue;
+        }
+        let faces = e
+            .faces
+            .into_iter()
+            .map(|points| {
+                let triangles = face_triangles(&points).ok_or(GltfError::Triangulation(e.id))?;
+                Ok(Face { points, triangles })
+            })
+            .collect::<Result<Vec<Face>, GltfError>>()?;
+        out.push(Solid {
+            id: e.id,
+            kind: e.kind,
+            name: e.name,
+            faces,
+        });
+    }
+    Ok(out)
+}
+
 pub(crate) fn elements(document: &Document) -> Result<Vec<Element>, GltfError> {
     let mut elements = fiducials(document);
     let (walls, openings) = walls_and_openings(document)?;
@@ -745,13 +802,7 @@ fn encode(elements: &[&Element], place: bool, extras: Option<Value>) -> Result<V
             let mut index: std::collections::BTreeMap<P3, u32> = std::collections::BTreeMap::new();
             let (mut positions, mut indices) = (Vec::<[f32; 3]>::new(), Vec::<u32>::new());
             for face in &e.faces {
-                let n = newell(face);
-                let k = (0..3)
-                    .max_by_key(|&k| (n[k].abs(), std::cmp::Reverse(k)))
-                    .unwrap_or(2);
-                let (u, v) = ((k + 1) % 3, (k + 2) % 3);
-                let flat: Vec<P2> = face.iter().map(|p| (p[u], p[v])).collect();
-                let tris = triangulate(&flat).ok_or(GltfError::Triangulation(e.id))?;
+                let tris = face_triangles(face).ok_or(GltfError::Triangulation(e.id))?;
                 for t in tris {
                     let mut tri = [0u32; 3];
                     for (slot, i) in tri.iter_mut().zip(t) {

@@ -674,3 +674,38 @@ fn a_provisional_glb_lists_its_proposed_items() {
     assert!(chunks(&bytes).0.get("extras").is_none());
     assert_eq!(bytes, glb(&l_room(true)));
 }
+
+#[test]
+fn solids_are_the_glb_elements_with_exact_triangles_covering_each_face() {
+    let doc = l_room(true);
+    let got = solids(&doc).unwrap_or_else(|e| panic!("{e}"));
+    let with_faces: Vec<(Uuid, &str)> = elements(&doc)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .iter()
+        .filter(|e| !e.faces.is_empty())
+        .map(|e| (e.id, e.kind))
+        .collect();
+    let ids: Vec<(Uuid, &str)> = got.iter().map(|s| (s.id, s.kind)).collect();
+    assert_eq!(ids, with_faces);
+    assert!(got.iter().any(|s| s.kind == "wall") && got.iter().any(|s| s.kind == "door"));
+    for s in &got {
+        assert!(!s.faces.is_empty(), "{}", s.name);
+        for f in &s.faces {
+            // The triangles' Newell areas (all with the face's winding) add
+            // up to the face's area, exactly.
+            let whole = newell(&f.points);
+            let mut sum = [0i128; 3];
+            for t in &f.triangles {
+                let tri: Vec<P3> = t.iter().map(|&i| f.points[i]).collect();
+                let n = newell(&tri);
+                // Parallel to the face's normal and the same way round.
+                assert!((0..3).all(|k| n[k].signum() == whole[k].signum()));
+                for k in 0..3 {
+                    sum[k] += n[k];
+                }
+            }
+            assert_eq!(sum, whole, "{}", s.name);
+            assert_ne!(whole, [0, 0, 0]);
+        }
+    }
+}
