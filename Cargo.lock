@@ -111,8 +111,10 @@ dependencies = [
  "archviz-cli",
  "archviz-core",
  "eframe",
+ "image",
  "proptest",
  "serde_json",
+ "sha2",
  "uuid",
 ]
 
@@ -1277,6 +1279,8 @@ dependencies = [
  "num-traits 0.2.19",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

@@ -826,6 +826,56 @@
             "idempotency_key"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/CreateUnderlay"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "create_underlay",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": {
+              "$ref": "#/$defs/SetUnderlayCalibration"
+            },
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "idempotency_key": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "const": "set_underlay_calibration",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "args",
+            "id",
+            "idempotency_key"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -979,6 +1029,10 @@
         "driving",
         "reference"
       ],
+      "type": "string"
+    },
+    "ContentHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
       "type": "string"
     },
     "CreateCeiling": {
@@ -1375,6 +1429,55 @@
       ],
       "type": "object"
     },
+    "CreateUnderlay": {
+      "additionalProperties": false,
+      "description": "Creates an underlay and the Asset of its image (DEC-14).",
+      "properties": {
+        "calibration": {
+          "$ref": "#/$defs/KnownDistance",
+          "description": "Sets the scale."
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnownDistance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A second known distance; its residual is derived and stored."
+        },
+        "heading": {
+          "$ref": "#/$defs/Direction",
+          "description": "The world direction of `calibration.pixel_a` to `pixel_b`."
+        },
+        "image": {
+          "$ref": "#/$defs/ContentHash",
+          "description": "SHA-256 of the image file the app copied into the project."
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Point",
+          "description": "Where `calibration.pixel_a` lies in the world."
+        },
+        "storey": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "name",
+        "storey",
+        "image",
+        "calibration",
+        "origin",
+        "heading"
+      ],
+      "type": "object"
+    },
     "CreateWall": {
       "additionalProperties": false,
       "description": "Creates a wall between two existing nodes (6.1, Q-66).",
@@ -1728,6 +1831,27 @@
       ],
       "type": "string"
     },
+    "KnownDistance": {
+      "additionalProperties": false,
+      "description": "Two image points and the real distance between them.",
+      "properties": {
+        "distance": {
+          "$ref": "#/$defs/Sourced"
+        },
+        "pixel_a": {
+          "$ref": "#/$defs/PixelPoint"
+        },
+        "pixel_b": {
+          "$ref": "#/$defs/PixelPoint"
+        }
+      },
+      "required": [
+        "pixel_a",
+        "pixel_b",
+        "distance"
+      ],
+      "type": "object"
+    },
     "Layer": {
       "additionalProperties": false,
       "description": "One material layer.",
@@ -2012,6 +2136,25 @@
       "required": [
         "rise",
         "run"
+      ],
+      "type": "object"
+    },
+    "PixelPoint": {
+      "additionalProperties": false,
+      "description": "A pixel position in an underlay image.",
+      "properties": {
+        "x": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
       ],
       "type": "object"
     },
@@ -2518,6 +2661,42 @@
         "elevation",
         "floor_to_floor",
         "default_ceiling_height"
+      ],
+      "type": "object"
+    },
+    "SetUnderlayCalibration": {
+      "additionalProperties": false,
+      "description": "Replaces an underlay's calibration and placement (DEC-14).",
+      "properties": {
+        "calibration": {
+          "$ref": "#/$defs/KnownDistance"
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnownDistance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "heading": {
+          "$ref": "#/$defs/Direction"
+        },
+        "origin": {
+          "$ref": "#/$defs/Point"
+        },
+        "underlay": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "underlay",
+        "calibration",
+        "origin",
+        "heading"
       ],
       "type": "object"
     },

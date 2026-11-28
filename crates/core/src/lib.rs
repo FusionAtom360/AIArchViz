@@ -32,6 +32,7 @@ mod proposal;
 mod roof;
 mod solver;
 mod space;
+mod underlay;
 mod units;
 mod validity;
 
@@ -81,6 +82,10 @@ pub use solver::{
 pub use space::{
     PolygonError, SpaceError, boundary_outline, check_polygon, polygon_area, space_boundary,
     spaces_outline, update_spaces,
+};
+pub use underlay::{
+    CalibrationError, CreateUnderlay, PIXEL_MAX, SetUnderlayCalibration, UNDERLAY_LICENSE,
+    check_known, direction_of, heading_of, residual, scaled_length,
 };
 pub use units::{
     GRID_NM, InputContext, InputRounding, ParseError, ParsedLength, ProjectUnit, echo_length,

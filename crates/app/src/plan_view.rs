@@ -5,8 +5,11 @@
 //! (T-202b, draw.rs), and in dimension mode picks references for a
 //! dimension (T-203, dimension.rs). Every Distance constraint is drawn as a
 //! dimension where dimension_layout.rs places it; a click selects one and
-//! Delete proposes its removal (T-204d). Floats appear only between the viewport and the painter; every
-//! value that leaves this widget as a command argument is snapped first.
+//! Delete proposes its removal (T-204d). Underlay images are drawn under
+//! the plan, and while one is calibrated clicks go to the calibration
+//! (T-205, underlay.rs). Floats appear only between the viewport and the
+//! painter; every value that leaves this widget as a command argument is
+//! snapped first.
 
 use archviz_core::{Axis, ConstraintStatus, DatumGeometry, Function, Length, format_length};
 use eframe::egui::{
@@ -22,7 +25,7 @@ use crate::dimension_layout::Side;
 use crate::drag::{Drag, Preview};
 use crate::draw::{Click, Run, WallTool};
 use crate::scene::{Entity, Scene};
-use crate::snap::{SnapKind, to_grid, visible_step};
+use crate::snap::{SnapKind, snap, to_grid, visible_step};
 use crate::viewport::{Screen, Viewport, World, clip_polygon, clip_segment};
 
 /// Pixels within which the pointer picks an entity or snaps to a reference.
@@ -56,7 +59,25 @@ pub enum Event {
     /// Delete was pressed with this dimension selected; the app proposes
     /// RemoveConstraint (T-204d).
     Remove(Uuid),
+    /// A click while an underlay is calibrated: where, and that point
+    /// snapped as a plan point (T-205).
+    Calibrate {
+        at: World,
+        snapped: World,
+    },
 }
+
+/// An underlay image to draw: its texture and its corners in the world, top
+/// left first, clockwise in the image.
+pub struct Drawn {
+    pub texture: egui::TextureId,
+    pub corners: [World; 4],
+}
+
+/// How opaque an underlay is drawn, so the plan reads over it.
+const UNDERLAY_ALPHA: u8 = 150;
+/// Calibration points and lines.
+pub const CALIBRATION: Color32 = Color32::from_rgb(220, 0, 160);
 
 pub struct PlanView {
     viewport: Option<Viewport>,
@@ -88,6 +109,14 @@ pub struct PlanView {
     pub selected_dimension: Option<Uuid>,
     /// Where each dimension was drawn last frame, for clicks.
     dimension_hits: Vec<(Uuid, egui::Rect)>,
+    /// Underlay images, drawn under everything else; set by the app.
+    pub underlays: Vec<Drawn>,
+    /// An underlay is being calibrated: clicks go to it (T-205).
+    pub calibrating: bool,
+    /// The calibration's points in the world, in pick order.
+    pub calibration_marks: Vec<World>,
+    /// The world corners of the canvas last frame (min, max).
+    pub visible: Option<(World, World)>,
 }
 
 fn pos(s: Screen) -> Pos2 {
@@ -123,12 +152,22 @@ impl PlanView {
             conflicting_dimensions: BTreeSet::new(),
             selected_dimension: None,
             dimension_hits: Vec::new(),
+            underlays: Vec::new(),
+            calibrating: false,
+            calibration_marks: Vec::new(),
+            visible: None,
         }
     }
 
     /// Fits the whole scene on the next frame.
     pub fn fit(&mut self) {
         self.viewport = None;
+    }
+
+    /// Where a world point was drawn last frame (tests click on it).
+    #[cfg(test)]
+    pub fn screen_of(&self, w: World) -> Option<Pos2> {
+        self.viewport.as_ref().map(|v| pos(v.to_screen(w)))
     }
 
     /// What the current mode asks of the user; first in the status line.
@@ -250,6 +289,11 @@ impl PlanView {
         }
         let viewport = viewport.clone();
         self.pointer = response.hover_pos().map(|p| viewport.to_world(screen(p)));
+        let (lt, rb) = (
+            viewport.to_world(screen(rect.left_top())),
+            viewport.to_world(screen(rect.right_bottom())),
+        );
+        self.visible = Some(((lt.0, rb.1), (rb.0, lt.1)));
 
         // A dimension whose constraint is gone is no longer selected.
         if let Some(id) = self.selected_dimension
@@ -264,7 +308,26 @@ impl PlanView {
         if self.dimensions.is_none() {
             self.hover = None;
         }
-        if let Some(tool) = &mut self.walls {
+        if self.calibrating {
+            // Calibrating an underlay: a click is an image point or, snapped
+            // like a wall point, where the image's first point lies.
+            self.next = None;
+            self.drag = None;
+            self.preview = None;
+            if response.clicked_by(PointerButton::Primary)
+                && let Some(at) = at
+            {
+                let tolerance = viewport.nm(SNAP_PX);
+                let step = visible_step(viewport.scale());
+                let snapped = |axis: Axis, v: i64| {
+                    snap(v, &scene.references(axis, None), tolerance, step).value
+                };
+                event = Event::Calibrate {
+                    at,
+                    snapped: (snapped(Axis::X, at.0), snapped(Axis::Y, at.1)),
+                };
+            }
+        } else if let Some(tool) = &mut self.walls {
             // Wall mode: clicks place points; nothing is selected or dragged.
             self.drag = None;
             self.preview = None;
@@ -413,6 +476,22 @@ impl PlanView {
         };
         let accent = Color32::from_rgb(0, 140, 255);
         let font = FontId::proportional(12.0);
+
+        // Underlay images, under the grid and the plan (6.6).
+        for u in &self.underlays {
+            let mut mesh = egui::Mesh::with_texture(u.texture);
+            let tint = Color32::from_white_alpha(UNDERLAY_ALPHA);
+            let uv = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+            for (corner, (s, t)) in u.corners.iter().zip(uv) {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: pos(v.to_screen(*corner)),
+                    uv: Pos2::new(s, t),
+                    color: tint,
+                });
+            }
+            mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+            painter.add(Shape::mesh(mesh));
+        }
 
         // Grid: the step a click snaps to (Q-79).
         {
@@ -618,6 +697,22 @@ impl PlanView {
                 let s = v.to_screen(*p);
                 if clip_segment(s, s, lo, hi).is_some() {
                     painter.circle_stroke(pos(s), 4.0, Stroke::new(1.5, accent));
+                }
+            }
+        }
+        // Calibration: the known distance's ends, then the check's, each
+        // pair joined.
+        for pair in self.calibration_marks.chunks(2) {
+            let stroke = Stroke::new(2.0, CALIBRATION);
+            if let [a, b] = pair
+                && let Some((p, q)) = clip_segment(v.to_screen(*a), v.to_screen(*b), lo, hi)
+            {
+                painter.line_segment([pos(p), pos(q)], stroke);
+            }
+            for p in pair {
+                let s = v.to_screen(*p);
+                if clip_segment(s, s, lo, hi).is_some() {
+                    painter.circle_stroke(pos(s), 5.0, stroke);
                 }
             }
         }

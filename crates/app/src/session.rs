@@ -672,7 +672,7 @@ pub(crate) mod dimension_tests {
         };
         let value = parse_value(text, doc.project.default_unit).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(format_length(value), echo, "parser echo");
-        let action = distance_action(&doc, &pair, value).unwrap_or_else(|e| panic!("{e}"));
+        let action = distance_action(&doc, &pair, value, false).unwrap_or_else(|e| panic!("{e}"));
         session
             .propose(action)
             .unwrap_or_else(|e| panic!("{text}: {e}"))

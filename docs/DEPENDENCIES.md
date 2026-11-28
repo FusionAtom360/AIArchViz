@@ -31,3 +31,5 @@ Every third-party dependency, with license and reason. Allowed licenses are list
 | proptest | as above | as above | archviz-app (dev) | Property tests that every snap and every drag command value lies on the 1/16 in grid (T-202). |
 | archviz-cli, archviz-core | (workspace) | GPL-3.0-or-later | archviz-app | The app is a client of the command API (spec C5): it hosts `store::Project` and `host::serve`, and adds no business logic. |
 | serde_json, uuid (`v4`) | as above | as above | archviz-app | Collection counts in the project view; random ids for commands the app hosts (Q-49). |
+| image | 0.25.10 (default-features off, `png`, `jpeg`) | MIT OR Apache-2.0 | archviz-app | Decodes the PNG or JPEG of the paper plan for an underlay (spec 6.6, T-205, Q-83 (2)(a)); its size is read from the header and checked before decoding. Already in the lock file through egui's clipboard (png); `jpeg` adds zune-jpeg and zune-core (MIT OR Apache-2.0 OR Zlib). |
+| sha2 | 0.10.9 (default-features off) | MIT OR Apache-2.0 | archviz-app | The content hash an underlay image is kept under in the project's assets folder (DEC-14). Already used by archviz-export. |

@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use archviz_core::{
     Action, AddConstraint, Axis, ConstraintKind, DatumGeometry, Document, InputContext, Length,
-    ParseError, ProjectUnit, ProposedAction, Reference, Source, Uuid, WallSide,
+    ParseError, ProjectUnit, ProposedAction, Provenance, Reference, Source, Uuid, WallSide,
     describe_constraint, format_length, parse_length, reference_coordinate,
 };
 
@@ -230,10 +230,16 @@ pub fn parse_value(text: &str, unit: ProjectUnit) -> Result<Length, String> {
     }
 }
 
-/// The driving, user-stated Distance between the picked references, with
-/// `a` the one at the lower coordinate now so `value` is the distance
-/// between them (7.1, Q-13).
-pub fn distance_action(doc: &Document, pair: &Pair, value: Length) -> Result<Action, String> {
+/// The driving Distance between the picked references, with `a` the one at
+/// the lower coordinate now so `value` is the distance between them (7.1,
+/// Q-13): user-stated, or Measured with provenance Transcribed when read off
+/// the underlay (6.6).
+pub fn distance_action(
+    doc: &Document,
+    pair: &Pair,
+    value: Length,
+    transcribed: bool,
+) -> Result<Action, String> {
     let at = |r: &Reference| reference_coordinate(doc, r, pair.axis).map_err(|e| format!("{e:?}"));
     let (a, b) = if at(&pair.b.reference)? < at(&pair.a.reference)? {
         (&pair.b, &pair.a)
@@ -249,8 +255,13 @@ pub fn distance_action(doc: &Document, pair: &Pair, value: Length) -> Result<Act
             tolerance: None,
         },
         status: None,
-        source: Source::UserStated,
-        provenance: None,
+        // Read off the paper plan: Measured, provenance Transcribed (6.6).
+        source: if transcribed {
+            Source::Measured
+        } else {
+            Source::UserStated
+        },
+        provenance: transcribed.then_some(Provenance::Transcribed),
     }))
 }
 

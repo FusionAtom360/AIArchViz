@@ -21,6 +21,8 @@ use crate::{CliError, ErrorCode};
 const GENESIS: &str = "genesis.json";
 const LOG: &str = "log.jsonl";
 const LOCK: &str = "project.lock";
+/// Files the document names by content hash, such as underlay images (DEC-14).
+pub const ASSETS: &str = "assets";
 
 /// An open project: the lock is held until it is dropped.
 pub struct Project {
@@ -141,7 +143,9 @@ impl Project {
     }
 
     /// "Save a copy as" (Q-77, DEC-13): writes this project's genesis and
-    /// committed log into `dest`, which must not hold a project already.
+    /// committed log into `dest`, which must not hold a project already,
+    /// then the files of its `assets` folder, such as underlay images
+    /// (DEC-14).
     pub fn copy_to(&self, dest: &Path) -> Result<(), CliError> {
         let genesis = std::fs::read(self.dir.join(GENESIS)).map_err(io)?;
         let log = std::fs::read(self.dir.join(LOG)).map_err(io)?;
@@ -149,7 +153,20 @@ impl Project {
         let log = log
             .get(..len)
             .ok_or_else(|| io(std::io::Error::other("the log is shorter than committed")))?;
-        write_new(dest, &genesis, log)
+        write_new(dest, &genesis, log)?;
+        let assets = self.dir.join(ASSETS);
+        if assets.is_dir() {
+            std::fs::create_dir_all(dest.join(ASSETS)).map_err(io)?;
+            let mut files: Vec<_> = std::fs::read_dir(&assets)
+                .map_err(io)?
+                .collect::<Result<_, _>>()
+                .map_err(io)?;
+            files.sort_by_key(std::fs::DirEntry::file_name);
+            for file in files.into_iter().filter(|f| f.path().is_file()) {
+                std::fs::copy(file.path(), dest.join(ASSETS).join(file.file_name())).map_err(io)?;
+            }
+        }
+        Ok(())
     }
 
     /// Appends one committed entry to the log and flushes it to disk, first
@@ -263,6 +280,27 @@ mod tests {
         let copy = super::open(&dest).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(copy.history.document(), project.history.document());
         drop((project, copy));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An underlay image in `assets` goes with the copy (DEC-14).
+    #[test]
+    fn a_copy_carries_the_assets_folder() {
+        let base = std::env::temp_dir().join(format!("archviz-copy-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (src, dest) = (base.join("src"), base.join("dest"));
+        create(&src, &genesis(1)).unwrap_or_else(|e| panic!("{e:?}"));
+        std::fs::create_dir_all(src.join(super::ASSETS)).unwrap_or_else(|e| panic!("{e}"));
+        let name = format!("{}.png", "a".repeat(64));
+        std::fs::write(src.join(super::ASSETS).join(&name), b"image bytes")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let project = super::open(&src).unwrap_or_else(|e| panic!("{e:?}"));
+        project.copy_to(&dest).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            std::fs::read(dest.join(super::ASSETS).join(&name)).ok(),
+            Some(b"image bytes".to_vec())
+        );
+        drop(project);
         let _ = std::fs::remove_dir_all(&base);
     }
 

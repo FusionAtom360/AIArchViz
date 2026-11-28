@@ -18,8 +18,8 @@ use crate::command::{Action, Command, DimensionTarget, Motion, SetConstraintValu
 use crate::create::{AddConstraint, CreateRoof, CreateWall, PlaceOccurrence};
 use crate::document::{
     Axis, Boundary, ConstraintKind, ConstraintStatus, DatumGeometry, Direction, Document, Function,
-    ItemSide, Layer, LightKind, OpeningEdge, OpeningKind, Placement, Point, Provenance, Reference,
-    Source, Sourced, VariantKind, WallSide, WallTop,
+    ItemSide, KnownDistance, Layer, LightKind, OpeningEdge, OpeningKind, Placement, Point,
+    Provenance, Reference, Source, Sourced, VariantKind, WallSide, WallTop,
 };
 use crate::edit::{MoveOutcome, displacement, request_for};
 use crate::identity::Uuid;
@@ -119,6 +119,40 @@ fn proposed(source: Source) -> &'static str {
 
 fn point(p: &Point) -> String {
     format!("({}, {})", len(p.x), len(p.y))
+}
+
+fn known(k: &KnownDistance) -> String {
+    format!(
+        "{} between pixels ({}, {}) and ({}, {})",
+        sourced(&k.distance),
+        k.pixel_a.x,
+        k.pixel_a.y,
+        k.pixel_b.x,
+        k.pixel_b.y
+    )
+}
+
+/// `20'-0" between pixels (120, 88) and (2520, 88), toward +X from (0'-0",
+/// 0'-0"); check 12'-0" between ..., residual 0'-1/4"`.
+fn calibration(
+    c: &KnownDistance,
+    origin: &Point,
+    heading: Direction,
+    check: &Option<KnownDistance>,
+) -> String {
+    let mut text = format!(
+        "{}, toward {} from {}",
+        known(c),
+        direction(heading),
+        point(origin)
+    );
+    if let Some(k) = check {
+        text.push_str(&format!("; check {}", known(k)));
+        if let Ok(r) = crate::underlay::residual(c, k) {
+            text.push_str(&format!(", residual {}", len(r)));
+        }
+    }
+    text
 }
 
 fn axis(a: Axis) -> &'static str {
@@ -274,8 +308,8 @@ impl<'a> Names<'a> {
         if self.get(|x| &x.assets, id).is_some() {
             return "an asset".into();
         }
-        if self.get(|x| &x.underlays, id).is_some() {
-            return "an underlay".into();
+        if let Some(x) = self.get(|x| &x.underlays, id) {
+            return format!("underlay {:?}", x.name);
         }
         if id == self.before.project.id {
             return format!("project {:?}", self.before.project.name);
@@ -748,6 +782,17 @@ impl<'a> Names<'a> {
                 self.create_surface("ceiling", a.storey, &a.boundary, &a.thickness, &a.elevation)
             }
             Action::CreateRoof(a) => self.create_roof(a),
+            Action::CreateUnderlay(a) => format!(
+                "Create underlay {:?} on {}: {}",
+                a.name,
+                self.entity(a.storey, 0),
+                calibration(&a.calibration, &a.origin, a.heading, &a.check)
+            ),
+            Action::SetUnderlayCalibration(a) => format!(
+                "Calibrate {}: {}",
+                self.entity(a.underlay, 0),
+                calibration(&a.calibration, &a.origin, a.heading, &a.check)
+            ),
             Action::CreateElementType(a) => format!(
                 "Create type {:?}, {} wide, {} deep, {} high",
                 a.name,
@@ -1021,6 +1066,7 @@ pub(crate) mod tests {
     };
     use crate::document::*;
     use crate::edit::tests::{EAST, IN, STOREY, center, chain, datum, uid};
+    use crate::underlay::{CreateUnderlay, SetUnderlayCalibration};
 
     fn l(nm: i64) -> Length {
         Length::from_nanometers(nm)
@@ -1049,6 +1095,23 @@ pub(crate) mod tests {
     const SAW: Uuid = Uuid::from_bytes([11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
     const SLOT: Uuid = Uuid::from_bytes([12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
     const SHOP: Uuid = Uuid::from_bytes([13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    const SCAN: Uuid = Uuid::from_bytes([14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    const SCAN_IMAGE: Uuid = Uuid::from_bytes([15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
+    fn scan_hash() -> ContentHash {
+        ContentHash::parse(&format!("sha256:{}", "c".repeat(64))).unwrap_or_else(|| unreachable!())
+    }
+
+    fn pixels(a: (i64, i64), b: (i64, i64), nm: i64) -> KnownDistance {
+        KnownDistance {
+            pixel_a: PixelPoint { x: a.0, y: a.1 },
+            pixel_b: PixelPoint { x: b.0, y: b.1 },
+            distance: Sourced {
+                value: l(nm),
+                source: Source::Measured,
+            },
+        }
+    }
     const SAW_TYPE: Uuid = Uuid::from_bytes([7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
     /// The 8.7 chain (west datum -120- W-001 -96- W-002 -72- W-003, a window
@@ -1125,6 +1188,28 @@ pub(crate) mod tests {
                 kind: VariantKind::Material,
                 options: vec![STUD, OAK],
                 selected: STUD,
+            },
+        );
+        doc.assets.insert(
+            SCAN_IMAGE,
+            Asset {
+                content_hash: scan_hash(),
+                source_url: None,
+                license: "client-provided".into(),
+                fidelity: Fidelity::Proxy,
+                converter_log: Vec::new(),
+            },
+        );
+        doc.underlays.insert(
+            SCAN,
+            Underlay {
+                name: "Paper plan".into(),
+                storey: STOREY,
+                image: SCAN_IMAGE,
+                calibration: pixels((0, 0), (100, 0), 120 * IN),
+                origin: Point { x: l(0), y: l(0) },
+                heading: Millidegrees::of_direction(Direction::PosX),
+                check: None,
             },
         );
         doc.spaces.insert(
@@ -1471,6 +1556,31 @@ pub(crate) mod tests {
                 }),
                 r#"Create type "Drill press", 2'-0" wide, 1'-4" deep, 5'-6" high"#,
             ),
+            (
+                Action::CreateUnderlay(CreateUnderlay {
+                    name: "Scan 2".into(),
+                    storey: STOREY,
+                    image: scan_hash(),
+                    calibration: pixels((120, 88), (2520, 88), 240 * IN),
+                    origin: Point {
+                        x: l(-24 * IN),
+                        y: l(0),
+                    },
+                    heading: Direction::PosX,
+                    check: Some(pixels((120, 88), (120, 1528), 144 * IN + IN / 4)),
+                }),
+                r#"Create underlay "Scan 2" on storey "Ground": 20'-0" between pixels (120, 88) and (2520, 88), toward +X from (-2'-0", 0'-0"); check 12'-0 1/4" between pixels (120, 88) and (120, 1528), residual 0'-0 1/4""#,
+            ),
+            (
+                Action::SetUnderlayCalibration(SetUnderlayCalibration {
+                    underlay: SCAN,
+                    calibration: pixels((0, 0), (0, 300), 120 * IN),
+                    origin: Point { x: l(0), y: l(0) },
+                    heading: Direction::NegY,
+                    check: Some(pixels((0, 0), (7, 0), 3 * IN)),
+                }),
+                r#"Calibrate underlay "Paper plan": 10'-0" between pixels (0, 0) and (0, 300), toward -Y from (0'-0", 0'-0"); check 0'-3" between pixels (0, 0) and (7, 0), residual ~0'-0 3/16""#,
+            ),
         ]
     }
 
@@ -1482,7 +1592,7 @@ pub(crate) mod tests {
         let rows = table(walls, constraints, window);
         let covered: BTreeSet<String> = rows.iter().map(|(a, _)| a.kind().to_string()).collect();
         assert_eq!(covered, all_kinds());
-        assert_eq!(covered.len(), 27);
+        assert_eq!(covered.len(), 29);
         for (action, expected) in rows {
             let (text, c, after) = echo(&doc, action);
             assert_eq!(text, expected, "{}", c.action.kind());

@@ -114,6 +114,16 @@ impl Millidegrees {
     pub const fn value(self) -> u32 {
         self.0
     }
+
+    /// The heading of an axis direction: 0, 90,000, 180,000 or 270,000.
+    pub const fn of_direction(direction: Direction) -> Self {
+        Millidegrees(match direction {
+            Direction::PosX => 0,
+            Direction::PosY => 90_000,
+            Direction::NegX => 180_000,
+            Direction::NegY => 270_000,
+        })
+    }
 }
 
 impl TryFrom<u32> for Millidegrees {

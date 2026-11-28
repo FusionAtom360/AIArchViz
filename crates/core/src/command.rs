@@ -29,6 +29,7 @@ use crate::document::{
 use crate::identity::Uuid;
 use crate::length::Length;
 use crate::solver::{LayerA, SolveError, Solver};
+use crate::underlay::{self, CreateUnderlay, SetUnderlayCalibration};
 use crate::units::ProjectUnit;
 
 /// One command.
@@ -233,6 +234,8 @@ pub enum Action {
     CreateCeiling(CreateCeiling),
     CreateRoof(CreateRoof),
     CreateElementType(CreateElementType),
+    CreateUnderlay(CreateUnderlay),
+    SetUnderlayCalibration(SetUnderlayCalibration),
 }
 
 impl Action {
@@ -266,6 +269,8 @@ impl Action {
             Action::CreateCeiling(_) => "create_ceiling",
             Action::CreateRoof(_) => "create_roof",
             Action::CreateElementType(_) => "create_element_type",
+            Action::CreateUnderlay(_) => "create_underlay",
+            Action::SetUnderlayCalibration(_) => "set_underlay_calibration",
         }
     }
 }
@@ -641,6 +646,10 @@ pub fn apply(document: &Document, command: &Command) -> Result<Document, Command
         Action::CreateElementType(args) => {
             create::create_element_type(&mut doc, args, new_id(0))?;
         }
+        Action::CreateUnderlay(args) => {
+            underlay::create_underlay(&mut doc, args, new_id(0), new_id(1))?;
+        }
+        Action::SetUnderlayCalibration(args) => underlay::set_underlay_calibration(&mut doc, args)?,
         other => return Err(CommandError::NotYetImplemented(other.kind())),
     }
     Ok(doc)

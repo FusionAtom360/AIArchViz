@@ -175,6 +175,18 @@ fn user_stated(action: &Action) -> Vec<(String, Length)> {
             s.option("/args/elevation", &c.elevation);
         }
         Action::CreateRoof(r) => s.roof(r),
+        Action::CreateUnderlay(u) => {
+            s.sourced("/args/calibration/distance", &u.calibration.distance);
+            if let Some(k) = &u.check {
+                s.sourced("/args/check/distance", &k.distance);
+            }
+        }
+        Action::SetUnderlayCalibration(u) => {
+            s.sourced("/args/calibration/distance", &u.calibration.distance);
+            if let Some(k) = &u.check {
+                s.sourced("/args/check/distance", &k.distance);
+            }
+        }
         Action::CreateElementType(t) => {
             let d = &t.declared_dimensions;
             if d.authority == Authority::UserStatedExact {

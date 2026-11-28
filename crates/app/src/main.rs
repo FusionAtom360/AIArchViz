@@ -35,6 +35,15 @@
 //! T-204d (Q-81 (b)(i), (c)(i), Q-82): every Distance constraint is drawn on
 //! the plan as a dimension (dimension_layout.rs); a click selects one and
 //! Delete proposes RemoveConstraint for it, reviewed in the panel.
+//!
+//! T-205 (6.6, Q-83, DEC-14): a PNG or JPEG of the paper plan is imported
+//! into the project's assets folder and calibrated (underlay.rs): two image
+//! points and a known distance, the axis direction they run and where the
+//! first lies on the plan, then optionally a check distance whose residual
+//! is shown. The calibration is a CreateUnderlay or SetUnderlayCalibration
+//! proposal, reviewed like any other; the image is drawn under the plan and
+//! never drives geometry. A dimension can be marked transcribed from the
+//! underlay: source Measured, provenance Transcribed.
 
 mod dimension;
 mod dimension_layout;
@@ -47,6 +56,7 @@ mod scene;
 mod session;
 mod snap;
 mod status;
+mod underlay;
 mod viewport;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -113,6 +123,9 @@ fn top_text(ui: &mut egui::Ui, id: &str, text: &mut String) {
     );
 }
 
+/// An uploaded underlay image and its size in pixels.
+type Uploaded = (egui::TextureHandle, (u32, u32));
+
 /// The plan scene and the version it was built at.
 type Built = Option<(u64, Result<Scene, String>)>;
 
@@ -138,6 +151,16 @@ struct App {
     checked: Option<(u64, serde_json::Value, BTreeSet<Uuid>)>,
     /// Text typed in the interview panel, by row key.
     typed: BTreeMap<String, String>,
+    /// The underlay image file to import, and the name to give it.
+    underlay_path: String,
+    underlay_name: String,
+    /// The underlay being calibrated, if any (T-205).
+    calibration: Option<underlay::Calibration>,
+    /// Underlay images uploaded for drawing, by content hash, with their
+    /// size in pixels; or why one could not be loaded.
+    textures: BTreeMap<String, Result<Uploaded, String>>,
+    /// A typed dimension is transcribed from the underlay (6.6).
+    transcribed: bool,
 }
 
 const WARN: egui::Color32 = egui::Color32::from_rgb(220, 60, 60);
@@ -170,6 +193,28 @@ fn length_input(
     out
 }
 
+/// A text box for a length and its parser echo (5.2).
+fn length_text(ui: &mut egui::Ui, text: &mut String, unit: ProjectUnit) {
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(text).desired_width(90.0));
+        if !text.trim().is_empty() {
+            match dimension::parse_value(text, unit) {
+                Ok(v) => ui.label(format!("reads as {}", format_length(v))),
+                Err(e) => ui.colored_label(WARN, e),
+            };
+        }
+    });
+}
+
+fn direction_label(d: archviz_core::Direction) -> &'static str {
+    match d {
+        archviz_core::Direction::PosX => "+X",
+        archviz_core::Direction::NegX => "-X",
+        archviz_core::Direction::PosY => "+Y",
+        archviz_core::Direction::NegY => "-Y",
+    }
+}
+
 impl App {
     fn new() -> App {
         App {
@@ -187,6 +232,11 @@ impl App {
             dimension: None,
             checked: None,
             typed: BTreeMap::new(),
+            underlay_path: String::new(),
+            underlay_name: String::new(),
+            calibration: None,
+            textures: BTreeMap::new(),
+            transcribed: false,
         }
     }
 
@@ -199,6 +249,9 @@ impl App {
         self.dimension = None;
         self.checked = None;
         self.typed.clear();
+        self.calibration = None;
+        self.textures.clear();
+        self.transcribed = false;
     }
 
     /// Puts `pending` in the review panel and highlights its conflicts. With
@@ -302,6 +355,7 @@ impl App {
         let (Some(session), Some((pair, text))) = (&self.session, &mut self.dimension) else {
             return;
         };
+        let transcribed = &mut self.transcribed;
         ui.separator();
         let axis = match pair.axis {
             Axis::X => "X",
@@ -312,9 +366,16 @@ impl App {
             pair.a.name, pair.b.name
         ));
         let doc = session.document();
+        if doc.underlays.is_empty() {
+            *transcribed = false;
+        } else {
+            ui.checkbox(transcribed, "Transcribed from the underlay")
+                .on_hover_text("Read off the paper plan: source Measured, provenance Transcribed.");
+        }
+        let transcribed = *transcribed;
         let value = length_input(ui, text, doc.project.default_unit, "Propose");
         let cancel = ui.button("Cancel").clicked();
-        let action = value.map(|v| (v, dimension::distance_action(&doc, pair, v)));
+        let action = value.map(|v| (v, dimension::distance_action(&doc, pair, v, transcribed)));
         if cancel {
             self.dimension = None;
         }
@@ -519,6 +580,335 @@ impl App {
         self.release();
     }
 
+    /// Uploads `image` for drawing, scaled down to fit the renderer's
+    /// largest texture if it must be (display only; picks use its pixels).
+    fn upload(ctx: &egui::Context, key: &str, image: &underlay::Image) -> egui::TextureHandle {
+        let max = u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(u32::MAX);
+        let (w, h) = image.size();
+        let full = egui::ColorImage::from_rgba_unmultiplied(
+            [w as usize, h as usize],
+            image.rgba.as_slice(),
+        );
+        let color = if w <= max && h <= max {
+            full
+        } else {
+            let raw = ::image::RgbaImage::from_raw(w, h, image.rgba.clone());
+            let small = raw.map(|r| ::image::imageops::thumbnail(&r, max.min(w), max.min(h)));
+            small.map_or(full, |s| {
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [s.width() as usize, s.height() as usize],
+                    s.as_raw(),
+                )
+            })
+        };
+        ctx.load_texture(key, color, egui::TextureOptions::LINEAR)
+    }
+
+    /// The texture of the image with `hash`, loaded from the project's
+    /// assets folder on first use.
+    fn texture(
+        &mut self,
+        ctx: &egui::Context,
+        hash: &archviz_core::ContentHash,
+    ) -> Result<(egui::TextureId, (u32, u32)), String> {
+        let Some(session) = &self.session else {
+            return Err("no project is open".to_string());
+        };
+        let entry = self
+            .textures
+            .entry(hash.as_str().to_string())
+            .or_insert_with(|| {
+                underlay::load(session.dir(), hash)
+                    .map(|image| (App::upload(ctx, hash.as_str(), &image), image.size()))
+            });
+        entry
+            .as_ref()
+            .map(|(t, size)| (t.id(), *size))
+            .map_err(Clone::clone)
+    }
+
+    /// Hands the plan every underlay to draw (the one being calibrated where
+    /// the calibration puts it) and the calibration's points.
+    fn show_underlays(&mut self, ctx: &egui::Context) {
+        self.plan.underlays.clear();
+        self.plan.calibration_marks.clear();
+        self.plan.calibrating = self.calibration.is_some() && self.pending.is_none();
+        let Some(session) = &self.session else {
+            return;
+        };
+        let doc = session.document();
+        let unit = doc.project.default_unit;
+        let editing = match &self.calibration {
+            Some(c) => match &c.target {
+                underlay::Target::Existing(id) => Some(*id),
+                underlay::Target::New { .. } => None,
+            },
+            None => None,
+        };
+        let mut drawn = Vec::new();
+        for (id, u) in &doc.underlays {
+            let Some(hash) = doc.assets.get(&u.image).map(|a| a.content_hash.clone()) else {
+                continue;
+            };
+            let placement = match (&self.calibration, editing == Some(*id)) {
+                (Some(c), true) => Some(c.placement(unit)),
+                _ => underlay::Placement::of(u),
+            };
+            if let (Ok((texture, size)), Some(p)) = (self.texture(ctx, &hash), placement) {
+                drawn.push(plan_view::Drawn {
+                    texture,
+                    corners: p.corners(size),
+                });
+            }
+        }
+        if let Some(c) = self.calibration.clone() {
+            let placement = c.placement(unit);
+            if let underlay::Target::New { image, .. } = &c.target
+                && let Ok((texture, _)) = self.texture(ctx, image)
+            {
+                drawn.push(plan_view::Drawn {
+                    texture,
+                    corners: placement.corners(c.size),
+                });
+            }
+            let at = |p: archviz_core::PixelPoint| placement.to_world((p.x as f64, p.y as f64));
+            self.plan.calibration_marks = [c.a, c.b, c.check_a, c.check_b]
+                .into_iter()
+                .flatten()
+                .map(at)
+                .collect();
+        }
+        self.plan.underlays = drawn;
+    }
+
+    /// Where a new image is first drawn: the plan's visible area, else the
+    /// scene, else 40 ft square at the origin.
+    fn start_area(&self) -> (viewport::World, viewport::World) {
+        const FORTY_FEET: i64 = 40 * 12 * 25_400_000;
+        let scene = match &self.scene {
+            Some((_, Ok(s))) => s.bounds(),
+            _ => None,
+        };
+        self.plan
+            .visible
+            .or(scene)
+            .unwrap_or(((0, 0), (FORTY_FEET, FORTY_FEET)))
+    }
+
+    /// Imports the image file typed in the panel and starts its calibration.
+    fn import_underlay(&mut self, ctx: &egui::Context) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let source = std::path::PathBuf::from(self.underlay_path.trim());
+        match underlay::import(session.dir(), &source) {
+            Ok(imported) => {
+                let name = match self.underlay_name.trim() {
+                    "" => imported.stem.clone(),
+                    name => name.to_string(),
+                };
+                let key = imported.hash.as_str().to_string();
+                let size = imported.image.size();
+                let texture = App::upload(ctx, &key, &imported.image);
+                self.textures.insert(key, Ok((texture, size)));
+                let (min, max) = self.start_area();
+                self.calibration = Some(underlay::Calibration::new(
+                    underlay::Target::New {
+                        name: name.clone(),
+                        image: imported.hash,
+                    },
+                    size,
+                    underlay::Placement::fit(size, min, max),
+                ));
+                self.dimension = None;
+                self.plan.walls = None;
+                self.plan.dimensions = None;
+                self.message = format!(
+                    "Underlay {name:?}: imported, {} x {} px; calibrate it.",
+                    size.0, size.1
+                );
+            }
+            Err(e) => self.message = format!("Underlay not imported: {e}"),
+        }
+    }
+
+    /// Starts recalibrating the underlay `id`, drawn where it is now.
+    fn recalibrate(&mut self, ctx: &egui::Context, id: Uuid) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let doc = session.document();
+        let Some(u) = doc.underlays.get(&id) else {
+            return;
+        };
+        let Some(hash) = doc.assets.get(&u.image).map(|a| a.content_hash.clone()) else {
+            return;
+        };
+        match self.texture(ctx, &hash) {
+            Ok((_, size)) => {
+                let (min, max) = self.start_area();
+                let start = underlay::Placement::of(u)
+                    .unwrap_or_else(|| underlay::Placement::fit(size, min, max));
+                self.calibration = Some(underlay::Calibration::new(
+                    underlay::Target::Existing(id),
+                    size,
+                    start,
+                ));
+                self.dimension = None;
+                self.plan.walls = None;
+                self.plan.dimensions = None;
+            }
+            Err(e) => self.message = format!("Underlay {:?}: {e}", u.name),
+        }
+    }
+
+    /// The underlay panel (6.6): each underlay with its calibration and
+    /// residual, the image import, and the calibration being made with its
+    /// typed distances, direction and residual, then Propose.
+    fn underlay_panel(&mut self, ui: &mut egui::Ui) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let doc = session.document();
+        let unit = doc.project.default_unit;
+        let mut recalibrate = None;
+        let mut import = false;
+        let mut propose = None;
+        let mut cancel = false;
+        ui.separator();
+        egui::CollapsingHeader::new(format!("Underlays ({})", doc.underlays.len()))
+            .default_open(true)
+            .show(ui, |ui| {
+                for (id, u) in &doc.underlays {
+                    for line in underlay::summary(u) {
+                        ui.label(line);
+                    }
+                    if ui.button("Recalibrate").clicked() {
+                        recalibrate = Some(*id);
+                    }
+                }
+                if let Some(c) = &mut self.calibration {
+                    App::calibration_box(ui, c, unit, &doc, &mut propose, &mut cancel);
+                    return;
+                }
+                ui.label("Image of the paper plan (PNG or JPEG file)");
+                ui.text_edit_singleline(&mut self.underlay_path);
+                ui.label("Name (default: the file name)");
+                ui.text_edit_singleline(&mut self.underlay_name);
+                import = ui.button("Import image").clicked();
+            });
+        if import {
+            self.import_underlay(ui.ctx());
+        }
+        if let Some(id) = recalibrate {
+            self.recalibrate(ui.ctx(), id);
+        }
+        if cancel {
+            self.calibration = None;
+            self.message = "Underlay: calibration cancelled.".to_string();
+        }
+        match propose {
+            Some(Ok(action)) => {
+                self.calibration = None;
+                self.propose_actions("Underlay calibration", vec![action]);
+            }
+            Some(Err(e)) => self.message = format!("Underlay: {e}"),
+            None => {}
+        }
+    }
+
+    /// The calibration being made: its points, distances, direction and the
+    /// check's residual as core computes it.
+    fn calibration_box(
+        ui: &mut egui::Ui,
+        c: &mut underlay::Calibration,
+        unit: ProjectUnit,
+        doc: &archviz_core::Document,
+        propose: &mut Option<Result<Action, String>>,
+        cancel: &mut bool,
+    ) {
+        let what = match &c.target {
+            underlay::Target::New { name, .. } => format!("Calibrate new underlay {name:?}"),
+            underlay::Target::Existing(id) => format!(
+                "Recalibrate underlay {:?}",
+                doc.underlays.get(id).map_or("", |u| u.name.as_str())
+            ),
+        };
+        ui.strong(what);
+        let pixel = |p: Option<archviz_core::PixelPoint>| {
+            p.map_or("not picked".to_string(), |p| format!("({}, {})", p.x, p.y))
+        };
+        ui.label(format!(
+            "Known distance: pixels {} to {}",
+            pixel(c.a),
+            pixel(c.b)
+        ));
+        length_text(ui, &mut c.distance, unit);
+        let nearest = match (c.a, c.b) {
+            (Some(a), Some(b)) => direction_label(underlay::nearest_direction(a, b)),
+            _ => "?",
+        };
+        egui::ComboBox::from_label("runs toward")
+            .selected_text(c.direction.map_or_else(
+                || format!("nearest ({nearest})"),
+                |d| direction_label(d).to_string(),
+            ))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut c.direction, None, format!("nearest ({nearest})"));
+                for d in [
+                    archviz_core::Direction::PosX,
+                    archviz_core::Direction::PosY,
+                    archviz_core::Direction::NegX,
+                    archviz_core::Direction::NegY,
+                ] {
+                    ui.selectable_value(&mut c.direction, Some(d), direction_label(d));
+                }
+            });
+        ui.label(match c.origin {
+            Some((x, y)) => format!(
+                "First point on the plan: ({}, {})",
+                format_length(Length::from_nanometers(x)),
+                format_length(Length::from_nanometers(y))
+            ),
+            None => "First point on the plan: click it".to_string(),
+        });
+        ui.label(format!(
+            "Check distance (optional): pixels {} to {}",
+            pixel(c.check_a),
+            pixel(c.check_b)
+        ));
+        length_text(ui, &mut c.check_distance, unit);
+        match (c.residual(unit), c.known(unit), c.check(unit)) {
+            (Some(Ok(r)), Some(known), Some(check)) => {
+                ui.label(underlay::residual_line(&known, &check, r));
+            }
+            (Some(Err(e)), ..) => {
+                ui.colored_label(WARN, e);
+            }
+            _ => {}
+        }
+        let storey = draw::storey_for(doc);
+        let action = match storey {
+            Some(storey) => c.action(storey, unit),
+            None => Err("the project has no storey yet: Draw walls proposes one".to_string()),
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(action.is_ok(), egui::Button::new("Propose"))
+                .on_disabled_hover_text(action.as_ref().err().cloned().unwrap_or_default())
+                .clicked()
+            {
+                *propose = Some(action.clone());
+            }
+            if ui.button("Clear check").clicked() {
+                c.clear_check();
+            }
+            if ui.button("Cancel").clicked() {
+                *cancel = true;
+            }
+        });
+    }
+
     fn opened(&mut self, result: Result<Session, archviz_cli::CliError>) {
         match result {
             Ok(session) => {
@@ -624,6 +1014,7 @@ impl App {
         ui.label(format!("Selection: {selection}"));
         self.dimension_box(ui);
         self.review(ui);
+        self.underlay_panel(ui);
         self.interview(ui);
     }
 
@@ -632,8 +1023,12 @@ impl App {
         // its first reference stays highlighted (T-204c).
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dimension = None;
+            if self.calibration.take().is_some() {
+                self.message = "Underlay: calibration cancelled.".to_string();
+            }
         }
         self.plan.held = self.dimension.as_ref().map(|(pair, _)| pair.a.clone());
+        self.show_underlays(ui.ctx());
         let Some(session) = &self.session else {
             return;
         };
@@ -666,6 +1061,14 @@ impl App {
             }
             Event::Picked(dimension::Pick::Refused(why)) => {
                 self.message = format!("Not picked: {why}.");
+            }
+            Event::Calibrate { at, snapped } => {
+                let unit = session.document().project.default_unit;
+                if let Some(c) = &mut self.calibration
+                    && let Err(why) = c.click(unit, at, snapped)
+                {
+                    self.message = format!("Underlay: {why}.");
+                }
             }
         }
     }
@@ -726,6 +1129,9 @@ impl App {
                 "Type the dimension from {} to {} in the panel at the right, then Propose",
                 pair.a.name, pair.b.name
             );
+        }
+        if let Some(c) = &self.calibration {
+            return c.instruction();
         }
         self.plan.instruction()
     }
@@ -1332,6 +1738,187 @@ mod tests {
             app.pending.is_none(),
             "Delete in a text box proposes nothing"
         );
+    }
+
+    /// A press and release of the primary button at `at` in the plan.
+    fn click_at(ctx: &Context, app: &mut App, at: Pos2) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        shapes_after(ctx, app, at, vec![press(true)]);
+        shapes_after(ctx, app, at, vec![press(false)]);
+    }
+
+    /// Clicks image pixel `p` where the plan draws it now.
+    fn click_pixel(ctx: &Context, app: &mut App, p: (i64, i64)) {
+        let unit = ProjectUnit::Inches;
+        let c = app
+            .calibration
+            .as_ref()
+            .unwrap_or_else(|| panic!("calibrating"));
+        let world = c.placement(unit).to_world((p.0 as f64, p.1 as f64));
+        let at = app
+            .plan
+            .screen_of(world)
+            .unwrap_or_else(|| panic!("no view"));
+        click_at(ctx, app, at);
+    }
+
+    /// Done when: the residual is displayed, and an underlay never changes
+    /// geometry. A PNG is imported into the shop, calibrated by clicks on
+    /// the plan (20 ft over 480 px along +X, then a 12'-0 1/4" check over
+    /// 288 px), proposed, reviewed and confirmed; the panel shows the
+    /// residual, the image is drawn, and the plan, the solve and every
+    /// collection but underlays and assets are exactly as before.
+    #[test]
+    fn an_underlay_is_calibrated_its_residual_shown_and_no_geometry_changes() {
+        let ctx = context();
+        let mut app = App::new();
+        let (dir, doc) = shop("underlay");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        let before_solve = app.session.as_ref().map(Session::solve);
+        let source = dir.with_file_name("Paper plan.png");
+        std::fs::write(&source, underlay::tests::png(600, 400)).unwrap_or_else(|e| panic!("{e}"));
+        app.underlay_path = source.display().to_string();
+        texts(&ctx, &mut app);
+        click_on(&ctx, &mut app, "Import image");
+        assert!(app.calibration.is_some(), "{}", app.status());
+        assert!(app.status().starts_with("Underlay: click the first end"));
+
+        // A click off the image (fitted to the plan's height, anchored at
+        // its top left) is refused with the reason.
+        let corner = app
+            .plan
+            .visible
+            .map(|(min, max)| (max.0, min.1))
+            .unwrap_or_default();
+        let off = app.plan.screen_of(corner).unwrap_or_default() + vec2(-5.0, -5.0);
+        click_at(&ctx, &mut app, off);
+        assert!(
+            app.status().contains("Underlay: click on the image."),
+            "{}",
+            app.status()
+        );
+        assert_eq!(app.calibration.as_ref().and_then(|c| c.a), None);
+
+        click_pixel(&ctx, &mut app, (20, 10));
+        click_pixel(&ctx, &mut app, (500, 10));
+        if let Some(c) = &mut app.calibration {
+            c.distance = "20'".to_string();
+            c.check_distance = "12' 1/4\"".to_string();
+        }
+        assert!(
+            app.status()
+                .starts_with("Underlay: click where the first point lies")
+        );
+        click_at(&ctx, &mut app, Pos2::new(1200.0, 600.0));
+        click_pixel(&ctx, &mut app, (20, 10));
+        click_pixel(&ctx, &mut app, (20, 298));
+        let c = app
+            .calibration
+            .clone()
+            .unwrap_or_else(|| panic!("calibrating"));
+        assert_eq!(c.step(), underlay::Step::Ready);
+        assert_eq!(c.a, Some(archviz_core::PixelPoint { x: 20, y: 10 }));
+        assert_eq!(c.b, Some(archviz_core::PixelPoint { x: 500, y: 10 }));
+        assert_eq!(c.check_b, Some(archviz_core::PixelPoint { x: 20, y: 298 }));
+        let origin = c.origin.unwrap_or_else(|| panic!("origin"));
+        assert_eq!(origin.0 % archviz_core::GRID_NM, 0, "the origin is snapped");
+        assert_eq!(origin.1 % archviz_core::GRID_NM, 0, "the origin is snapped");
+
+        // Before proposing, the panel shows the residual as core computes it.
+        let line = "Residual 0'-0 1/4\" (0.2%): check 12'-0 1/4\" reads 12'-0\"";
+        let shown = |app: &mut App| texts(&ctx, app).iter().filter(|(t, _)| t == line).count();
+        assert_eq!(shown(&mut app), 1);
+
+        click_on(&ctx, &mut app, "Propose");
+        let (what, review) = app
+            .pending
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}", app.status()));
+        assert_eq!(what, "Underlay calibration");
+        let echo = review.echo.join("\n");
+        assert!(
+            echo.starts_with("Create underlay \"Paper plan\" on storey"),
+            "{echo}"
+        );
+        assert!(
+            echo.contains("20'-0\" between pixels (20, 10) and (500, 10), toward +X"),
+            "{echo}"
+        );
+        assert!(echo.ends_with("residual 0'-0 1/4\""), "{echo}");
+        assert!(review.blocked.is_empty(), "{:?}", review.blocked);
+        click_on(&ctx, &mut app, "Confirm");
+        assert!(app.pending.is_none(), "{}", app.status());
+
+        // The residual is displayed for the committed underlay.
+        assert_eq!(shown(&mut app), 1);
+        let shapes = shapes_after(&ctx, &mut app, Pos2::new(1200.0, 600.0), Vec::new());
+        let image_drawn = shapes.iter().any(|c| match &c.shape {
+            Shape::Mesh(m) => m.texture_id != egui::TextureId::default(),
+            _ => false,
+        });
+        assert!(image_drawn, "the underlay image is drawn");
+
+        // No geometry changed.
+        let session = app.session.as_ref().unwrap_or_else(|| panic!("open"));
+        let after = session.document();
+        assert_eq!(after.underlays.len(), 1);
+        let mut without = after.clone();
+        without.underlays.clear();
+        without.assets.retain(|id, _| doc.assets.contains_key(id));
+        assert_eq!(without, doc);
+        assert_eq!(Scene::build(&after), Scene::build(&doc));
+        assert_eq!(Some(session.solve()), before_solve);
+        let u = after.underlays.values().next().unwrap_or_else(|| panic!());
+        assert_eq!(
+            u.check.as_ref().map(|k| k.residual.nanometers()),
+            Some(6_350_000)
+        );
+        let image = after
+            .assets
+            .get(&u.image)
+            .unwrap_or_else(|| panic!("asset"));
+        let file = underlay::asset_file(&dir, &image.content_hash, underlay::Format::Png);
+        assert!(file.is_file(), "{}", file.display());
+
+        // A transcribed dimension is proposed as Measured, Transcribed.
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let wall = scene.walls.first().unwrap_or_else(|| panic!("walls"));
+        let other = scene
+            .walls
+            .iter()
+            .find(|w| w.id != wall.id && w.across == wall.across)
+            .unwrap_or_else(|| panic!("a parallel wall"));
+        let center = |w: &crate::scene::WallShape| dimension::Picked {
+            reference: archviz_core::Reference::WallCenter { wall: w.id },
+            axis: Some(w.across),
+            name: format!("{} center", w.label),
+        };
+        let pair = dimension::Pair {
+            a: center(wall),
+            b: center(other),
+            axis: wall.across,
+        };
+        app.dimension = Some((pair, "10'".to_string()));
+        texts(&ctx, &mut app);
+        click_on(&ctx, &mut app, "Transcribed from the underlay");
+        assert!(app.transcribed);
+        click_on(&ctx, &mut app, "Propose");
+        let (_, review) = app
+            .pending
+            .as_ref()
+            .unwrap_or_else(|| panic!("{}", app.status()));
+        let echo = review.echo.join("\n");
+        assert!(echo.contains("transcribed from the underlay"), "{echo}");
+        assert!(
+            echo.contains("tolerance"),
+            "Measured takes a tolerance: {echo}"
+        );
+        let _ = std::fs::remove_file(&source);
     }
 
     #[test]
