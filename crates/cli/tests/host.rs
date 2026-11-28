@@ -261,3 +261,38 @@ fn a_stale_host_file_falls_back_to_the_files() {
     assert!(!dir.join(HOST_FILE).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// T-201b (Q-80): a host stopped right after it starts, before its accept
+/// thread first waits for a client, still stops. Many hosts at once, more
+/// than there are cores, so accept threads start late.
+#[test]
+fn a_host_stopped_right_after_it_starts_always_stops() {
+    const HOSTS: usize = 48;
+    const ROUNDS: usize = 25;
+    let dirs: Vec<PathBuf> = (0..HOSTS)
+        .map(|i| fresh_project(&format!("stop-{i}")))
+        .collect();
+    let (done, finished) = std::sync::mpsc::channel();
+    for dir in dirs.clone() {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            for _ in 0..ROUNDS {
+                let (shared, server, _) = start(&dir);
+                drop(server);
+                drop(shared);
+            }
+            let _ = done.send(());
+        });
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    for n in 0..HOSTS {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        finished
+            .recv_timeout(left)
+            .unwrap_or_else(|_| panic!("{} of {HOSTS} hosts did not stop within 60 s", HOSTS - n));
+    }
+    for dir in dirs {
+        assert!(!dir.join(HOST_FILE).exists(), "host.json removed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

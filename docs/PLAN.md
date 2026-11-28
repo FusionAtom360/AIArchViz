@@ -369,6 +369,11 @@ Phase 2 puts the command API behind an egui app so a non-expert can enter measur
 - Build: an eframe app with open, save and autosave. The app is the host process: it serves the command API over a named pipe with a per-session token, and the CLI attaches to it when it is running.
 - Done when: CLI commands issued while the app is open appear in the app, and a concurrency test shows two clients cannot corrupt the project.
 
+**T-201b Host shutdown never hangs.** Spec 3.1; Q-80. Depends on T-201.
+
+- Build: stopping a host always ends its accept loop. The wake connection `Server::drop` makes stays open until the accept thread has ended, so a host stopped before its accept thread first waits for a client still stops.
+- Done when: a test that stops many hosts right after starting them, in parallel, finishes within its deadline, having hung before the fix.
+
 **T-202 Plan view.** Spec 3.1, 5.3. Depends on T-201.
 
 - Build: 2D rendering of walls, openings, slabs, occurrences and labels; pan and zoom with 64-bit transforms; snapping to the 1/16 in grid and to references; selection.

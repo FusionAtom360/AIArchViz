@@ -95,11 +95,16 @@ pub struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        // Wake the accept loop so it sees the flag.
-        let _ = connect(&self.pipe);
+        // Wake the accept loop so it sees the flag. The connection stays
+        // open until the loop has ended: closed at once, it would be lost if
+        // the loop had not yet started waiting (the server's connect then
+        // fails with ERROR_NO_DATA, which interprocess answers by waiting
+        // for another client), and `join` would never return (Q-80).
+        let wake = connect(&self.pipe);
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
         }
+        drop(wake);
         let _ = std::fs::remove_file(self.dir.join(HOST_FILE));
     }
 }
