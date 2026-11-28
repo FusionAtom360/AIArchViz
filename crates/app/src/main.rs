@@ -26,6 +26,11 @@
 //! ambiguities, Proposed flags, consequences and alternatives, and commits
 //! only on Confirm, unless the user turns on auto_commit_unambiguous (off by
 //! default) and the proposal is unambiguous (9.4).
+//!
+//! T-204b (Q-81 (a)): the top bar holds only the project controls, with
+//! text boxes four times egui's default width; every message goes to the
+//! one status line in the bottom bar, after the mode's instruction and
+//! before the pointer coordinates (status.rs).
 
 mod dimension;
 mod drag;
@@ -36,6 +41,7 @@ mod review;
 mod scene;
 mod session;
 mod snap;
+mod status;
 mod viewport;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,6 +79,31 @@ fn system_fonts() -> Option<egui::FontDefinitions> {
             .push("system".to_string());
     }
     Some(fonts)
+}
+
+/// The width of each text box in the top bar: four times egui's default
+/// `text_edit_width` (280 px), the width T-204 used (Q-81 (a)).
+const TOP_TEXT_WIDTH: f32 = 4.0 * 280.0;
+
+/// The ids of the top bar's text boxes, in the order shown.
+const TOP_TEXT_BOXES: [&str; 4] = [
+    "project-folder",
+    "project-name",
+    "building-name",
+    "save-copy-as",
+];
+
+/// A text box in the top bar, `TOP_TEXT_WIDTH` wide. Its space is
+/// allocated at that size: a grid cell otherwise offers a text box only the
+/// column's width from the previous frame, so the box never grows.
+fn top_text(ui: &mut egui::Ui, id: &str, text: &mut String) {
+    let height = ui.spacing().interact_size.y;
+    ui.add_sized(
+        [TOP_TEXT_WIDTH, height],
+        egui::TextEdit::singleline(text)
+            .id(egui::Id::unique(id))
+            .desired_width(TOP_TEXT_WIDTH),
+    );
 }
 
 /// The plan scene and the version it was built at.
@@ -139,7 +170,7 @@ impl App {
             name: String::new(),
             building: String::new(),
             copy_to: String::new(),
-            message: "Open a project folder, or create one.".to_string(),
+            message: String::new(),
             session: None,
             view: None,
             scene: None,
@@ -500,7 +531,7 @@ impl App {
         };
         egui::Grid::new("project").num_columns(3).show(ui, |ui| {
             ui.label("Project folder");
-            ui.text_edit_singleline(&mut self.folder);
+            top_text(ui, TOP_TEXT_BOXES[0], &mut self.folder);
             ui.horizontal(|ui| {
                 if ui.button("Open").clicked() {
                     self.session = None;
@@ -519,11 +550,11 @@ impl App {
             ui.end_row();
 
             ui.label("New project name");
-            ui.text_edit_singleline(&mut self.name);
+            top_text(ui, TOP_TEXT_BOXES[1], &mut self.name);
             ui.label("");
             ui.end_row();
             ui.label("Building name");
-            ui.text_edit_singleline(&mut self.building);
+            top_text(ui, TOP_TEXT_BOXES[2], &mut self.building);
             if ui.button("Create in project folder").clicked() {
                 self.session = None;
                 let result = Session::create(
@@ -537,7 +568,7 @@ impl App {
             ui.end_row();
 
             ui.label("Save a copy as");
-            ui.text_edit_singleline(&mut self.copy_to);
+            top_text(ui, TOP_TEXT_BOXES[3], &mut self.copy_to);
             if let Some(session) = &self.session {
                 if ui.button("Save copy").clicked() {
                     let dest = Path::new(self.copy_to.trim());
@@ -551,12 +582,10 @@ impl App {
             }
             ui.end_row();
         });
-        ui.label(&self.message);
     }
 
     fn info(&mut self, ui: &mut egui::Ui) {
         let Some(session) = &self.session else {
-            ui.label("No project is open.");
             return;
         };
         let version = session.version();
@@ -590,7 +619,6 @@ impl App {
 
     fn plan(&mut self, ui: &mut egui::Ui) {
         let Some(session) = &self.session else {
-            ui.label("No project is open.");
             return;
         };
         let version = session.version();
@@ -599,11 +627,7 @@ impl App {
         }
         let scene = match &self.scene {
             Some((_, Ok(scene))) => scene,
-            Some((_, Err(e))) => {
-                ui.label(format!("The plan cannot be drawn: {e}"));
-                return;
-            }
-            None => return,
+            Some((_, Err(_))) | None => return,
         };
         match self.plan.show(ui, scene) {
             Event::None => {}
@@ -650,8 +674,52 @@ fn describe(scene: &Built, selected: Option<Entity>) -> String {
     text.unwrap_or_else(|| "nothing".to_string())
 }
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl App {
+    /// What the app asks of the user now: open a project, review a
+    /// proposal, type a dimension's value, or the plan tool's instruction.
+    fn instruction(&self) -> String {
+        if self.session.is_none() {
+            return "Open a project folder, or create one".to_string();
+        }
+        if let Some((what, _)) = &self.pending {
+            return format!("Review {what} in the panel at the right: Confirm or Discard");
+        }
+        if let Some((pair, _)) = &self.dimension {
+            return format!(
+                "Type the dimension from {} to {} in the panel at the right, then Propose",
+                pair.a.name, pair.b.name
+            );
+        }
+        self.plan.instruction()
+    }
+
+    /// The last message, and why the plan cannot be drawn if it cannot.
+    fn last_message(&self) -> String {
+        match (&self.scene, &self.session) {
+            (Some((_, Err(e))), Some(_)) if self.message.is_empty() => {
+                format!("The plan cannot be drawn: {e}")
+            }
+            (Some((_, Err(e))), Some(_)) => {
+                format!("{}; the plan cannot be drawn: {e}", self.message)
+            }
+            _ => self.message.clone(),
+        }
+    }
+
+    /// The one status line (Q-81 (a)).
+    fn status(&self) -> String {
+        let coordinates = if self.session.is_some() {
+            self.plan.coordinates()
+        } else {
+            String::new()
+        };
+        status::line(&self.instruction(), &self.last_message(), &coordinates)
+    }
+
+    /// The whole window: project controls on top, tools and the status line
+    /// at the bottom, the info and review panel at the right, the plan in
+    /// the middle.
+    fn layout(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -678,7 +746,7 @@ impl eframe::App for App {
                 {
                     self.toggle_dimensions();
                 }
-                ui.label(self.plan.status());
+                ui.label(self.status());
             });
         });
         egui::Panel::right("info")
@@ -688,6 +756,12 @@ impl eframe::App for App {
                 egui::ScrollArea::vertical().show(ui, |ui| self.info(ui));
             });
         egui::CentralPanel::default().show(ui, |ui| self.plan(ui));
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.layout(ui);
     }
 }
 
@@ -710,5 +784,257 @@ fn main() -> std::process::ExitCode {
             eprintln!("archviz-app: {e}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::tests::shop;
+    use archviz_core::CreateNode;
+    use eframe::egui::{Context, Pos2, RawInput, Rect, Shape, vec2};
+
+    const WIDTH: f32 = 3000.0;
+    const HEIGHT: f32 = 1200.0;
+
+    fn context() -> Context {
+        let ctx = Context::default();
+        ctx.set_fonts(system_fonts().unwrap_or_else(|| panic!("no system font")));
+        ctx
+    }
+
+    fn input(pointer: Pos2) -> RawInput {
+        RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(WIDTH, HEIGHT))),
+            events: vec![egui::Event::PointerMoved(pointer)],
+            ..RawInput::default()
+        }
+    }
+
+    fn collect(shape: &Shape, out: &mut Vec<(String, Rect)>) {
+        match shape {
+            Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+            Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+
+    /// Runs the whole window for a few frames with the pointer over the
+    /// plan; every text drawn in the last frame, with where it was drawn.
+    fn texts(ctx: &Context, app: &mut App) -> Vec<(String, Rect)> {
+        let pointer = Pos2::new(1200.0, 600.0);
+        let mut output = None;
+        for _ in 0..4 {
+            let mut o = ctx.run_ui(input(pointer), |ui| app.layout(ui));
+            o.textures_delta.clear();
+            output = Some(o);
+        }
+        let mut out = Vec::new();
+        for clipped in output.map(|o| o.shapes).unwrap_or_default() {
+            collect(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// Shows `message` in the mode `app` is in and checks it is drawn once,
+    /// in the status line at the bottom of the window, after the mode's
+    /// instruction and before the coordinates. Returns the status line.
+    fn check(ctx: &Context, app: &mut App, message: &str, instruction: &str) -> String {
+        app.message = message.to_string();
+        let drawn = texts(ctx, app);
+        let with: Vec<&(String, Rect)> =
+            drawn.iter().filter(|(t, _)| t.contains(message)).collect();
+        assert_eq!(
+            with.len(),
+            1,
+            "{message} drawn {} times: {drawn:?}",
+            with.len()
+        );
+        let Some((line, rect)) = with.first() else {
+            panic!("not drawn");
+        };
+        assert_eq!(*line, app.status());
+        assert!(
+            rect.min.y > HEIGHT - 60.0,
+            "not in the bottom bar: {rect:?}"
+        );
+        let at = |part: &str| {
+            line.find(part)
+                .unwrap_or_else(|| panic!("{part:?} not in {line:?}"))
+        };
+        assert_eq!(at(instruction), 0, "{line}");
+        assert!(at(instruction) < at(message), "{line}");
+        let coordinates = app.plan.coordinates();
+        if app.session.is_some() {
+            assert!(!coordinates.is_empty(), "no coordinates over the plan");
+            assert!(at(message) < at(&coordinates), "{line}");
+            assert!(line.ends_with(&coordinates), "{line}");
+        } else {
+            assert!(line.ends_with(message), "{line}");
+        }
+        line.clone()
+    }
+
+    #[test]
+    fn every_message_is_in_the_status_line_after_the_instruction_and_before_the_coordinates() {
+        let ctx = context();
+        let mut app = App::new();
+
+        // No project: the instruction to open one, then the message.
+        check(
+            &ctx,
+            &mut app,
+            "Message 1 (no project).",
+            "Open a project folder",
+        );
+
+        let (dir, doc) = shop("status-line");
+        app.opened(Session::open(&dir, Box::new(|| {})));
+        assert!(app.session.is_some(), "{}", app.message);
+
+        // Select mode: the pointer is over the plan, so coordinates show.
+        let line = check(&ctx, &mut app, "Message 2 (select).", "Select:");
+        assert!(line.contains("x ") && line.contains("1 px ="), "{line}");
+
+        // Wall mode: the next point and the scale.
+        app.toggle_walls();
+        assert!(app.pending.is_none(), "the shop has a storey and datum");
+        let line = check(&ctx, &mut app, "Message 3 (walls).", "Draw walls:");
+        assert!(line.contains("next point x "), "{line}");
+
+        // Dimension mode, first pick.
+        app.toggle_dimensions();
+        check(
+            &ctx,
+            &mut app,
+            "Message 4 (first pick).",
+            "Dimension: pick the first",
+        );
+
+        // Dimension mode, second pick: the first reference is named.
+        let scene = Scene::build(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let wall = scene.walls.first().unwrap_or_else(|| panic!("walls"));
+        let first = dimension::Picked {
+            reference: archviz_core::Reference::WallCenter { wall: wall.id },
+            axis: Some(wall.across),
+            name: format!("{} center", wall.label),
+        };
+        let tool = app
+            .plan
+            .dimensions
+            .as_mut()
+            .unwrap_or_else(|| panic!("mode"));
+        assert!(matches!(
+            tool.click(Some(first.clone())),
+            dimension::Pick::First
+        ));
+        let line = check(
+            &ctx,
+            &mut app,
+            "Message 5 (second pick).",
+            "Dimension from ",
+        );
+        assert!(line.contains(&first.name), "{line}");
+
+        // A pair picked: type its value.
+        app.dimension = Some((
+            dimension::Pair {
+                a: first.clone(),
+                b: first.clone(),
+                axis: wall.across,
+            },
+            String::new(),
+        ));
+        check(
+            &ctx,
+            &mut app,
+            "Message 6 (value).",
+            "Type the dimension from ",
+        );
+        app.dimension = None;
+
+        // A proposal under review.
+        app.propose_actions(
+            "Node",
+            vec![Action::CreateNode(CreateNode {
+                x: Length::from_nanometers(0),
+                y: Length::from_nanometers(0),
+            })],
+        );
+        assert!(app.pending.is_some(), "{}", app.message);
+        check(
+            &ctx,
+            &mut app,
+            "Message 7 (review).",
+            "Review Node in the panel",
+        );
+    }
+
+    #[test]
+    fn the_message_is_read_only_by_the_status_line() {
+        // The app's code: everything before this test module.
+        let source = include_str!("main.rs")
+            .split("mod tests {")
+            .next()
+            .unwrap_or_default();
+        let reads: Vec<&str> = source
+            .lines()
+            .filter(|l| l.contains("self.message") && !l.contains("self.message ="))
+            .map(str::trim)
+            .collect();
+        // last_message reads it three times; nothing else shows it.
+        assert_eq!(
+            reads,
+            [
+                "(Some((_, Err(e))), Some(_)) if self.message.is_empty() => {",
+                "format!(\"{}; the plan cannot be drawn: {e}\", self.message)",
+                "_ => self.message.clone(),",
+            ]
+        );
+    }
+
+    #[test]
+    fn no_text_box_in_the_top_bar_is_narrower_than_four_times_its_t204_width() {
+        // T-204 put each box in the project grid with `text_edit_singleline`
+        // (egui's default width, 280 px); measure that layout as drawn.
+        let ctx = context();
+        let mut text = String::from("shop");
+        let mut t204 = 0.0_f32;
+        for _ in 0..4 {
+            let mut o = ctx.run_ui(input(Pos2::ZERO), |ui| {
+                egui::Panel::top("t204").show(ui, |ui| {
+                    egui::Grid::new("t204-grid").num_columns(3).show(ui, |ui| {
+                        ui.label("Project folder");
+                        t204 = ui.text_edit_singleline(&mut text).rect.width();
+                        let _ = ui.button("Open");
+                        ui.end_row();
+                    });
+                });
+            });
+            o.textures_delta.clear();
+        }
+        // The grid gave it only its 40 px minimum cell width; hold the new
+        // boxes to four times the larger of that and the 280 px asked for.
+        assert_eq!(t204, 40.0, "T-204 layout as drawn");
+        let t204 = t204.max(egui::Style::default().spacing.text_edit_width);
+        let mut app = App::new();
+        texts(&ctx, &mut app);
+        for id in TOP_TEXT_BOXES {
+            let response = ctx
+                .read_response(egui::Id::unique(id))
+                .unwrap_or_else(|| panic!("{id} not drawn"));
+            let width = response.rect.width();
+            assert!(width >= 4.0 * t204, "{id}: {width} px < 4 x {t204} px");
+            assert!(response.rect.max.y < 200.0, "{id} not in the top bar");
+        }
+        // Every text box in the top bar is one of those four.
+        let source = include_str!("main.rs");
+        let body = source
+            .split("fn top_bar(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .unwrap_or_else(|| panic!("top_bar not found"));
+        assert_eq!(body.matches("top_text(ui, ").count(), 4);
+        assert!(!body.contains("text_edit") && !body.contains("TextEdit"));
     }
 }

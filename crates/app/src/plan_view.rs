@@ -97,7 +97,30 @@ impl PlanView {
         self.viewport = None;
     }
 
-    pub fn status(&self) -> String {
+    /// What the current mode asks of the user; first in the status line.
+    pub fn instruction(&self) -> String {
+        if self.walls.is_some() {
+            return "Draw walls: click to place each point; click the first point to close, \
+                    Enter or double-click to finish, Esc to cancel"
+                .to_string();
+        }
+        if let Some(tool) = &self.dimensions {
+            return match tool.first() {
+                None => "Dimension: pick the first reference (wall face, wall center or datum)"
+                    .to_string(),
+                Some(p) => format!(
+                    "Dimension from {}: pick the second reference, Esc to cancel",
+                    p.name
+                ),
+            };
+        }
+        "Select: click to select, drag a wall, opening or item to move it; \
+         scroll to zoom, right or middle drag to pan"
+            .to_string()
+    }
+
+    /// The pointer readout; last in the status line.
+    pub fn coordinates(&self) -> String {
         let mut s = match self.pointer {
             Some((x, y)) => format!("x {}  y {}", length(to_grid(x)), length(to_grid(y))),
             None => String::new(),
@@ -127,18 +150,6 @@ impl PlanView {
                     length(i64::try_from(d).unwrap_or(i64::MAX))
                 ));
             }
-            s.push_str(
-                "   click the first point to close, Enter or double-click to finish, Esc to cancel",
-            );
-        }
-        if let Some(tool) = &self.dimensions {
-            s.push_str(&match tool.first() {
-                None => "   pick the first reference (wall face, wall center or datum)".to_string(),
-                Some(p) => format!(
-                    "   from {}: pick the second reference, Esc to cancel",
-                    p.name
-                ),
-            });
         }
         if let Some(v) = &self.viewport {
             s.push_str(&format!(
@@ -146,7 +157,7 @@ impl PlanView {
                 length(v.nm(1.0)).trim_start_matches('~')
             ));
         }
-        s
+        s.trim_start().to_string()
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, scene: &Scene) -> Event {
